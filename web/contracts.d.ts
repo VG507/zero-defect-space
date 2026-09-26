@@ -3,7 +3,7 @@
  * DO NOT EDIT MANUALLY. Run: python scripts/generate_contracts.py
  */
 
-export type EventType = "WorkOrderReceived" | "ItemReceived" | "IncomingInspectionCompleted" | "OperationStarted" | "OperationPaused" | "OperationResumed" | "OperationFinished" | "ReworkStarted" | "InspectionReported" | "OperatorActionObserved" | "MachineStateChanged" | "MachineWarning" | "MachineStopped" | "AssemblyImported";
+export type EventType = "WorkOrderReceived" | "ItemReceived" | "IncomingInspectionCompleted" | "OperationStarted" | "OperationPaused" | "OperationResumed" | "OperationFinished" | "ReworkStarted" | "InspectionReported" | "OperatorActionObserved" | "MachineStateChanged" | "MachineWarning" | "MachineStopped" | "AssemblyImported" | "ComponentInstalled" | "ComponentRemoved";
 
 export type InspectionResult = "signs_detected" | "no_signs_detected" | "unable_to_assess";
 export type ObservationQuality = "good" | "poor" | "unknown";

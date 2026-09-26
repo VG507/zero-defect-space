@@ -26,38 +26,47 @@ def sample_event(item, number, kind, minute, payload, station=None, operator=Non
 def seed(store: EventStore) -> None:
     normal = {"inspection_result": "no_signs_detected", "observation_quality": "good", "defects": []}
     incoming = {"inspection_result": "signs_detected", "observation_quality": "good",
-                "defects": [{"type": "scratch", "area": "outer-surface"}]}
+                "component_id": "C-002-A",
+                "defects": [{"type": "scratch", "area": "outer-surface", "component_id": "C-002-A"}]}
     after = {"inspection_result": "signs_detected", "observation_quality": "good",
-             "defects": [{"type": "weld_anomaly", "area": "seam-A"}]}
+             "component_id": "C-003-A", "operation_run_id": "R-003-A",
+             "defects": [{"type": "weld_anomaly", "area": "seam-A", "component_id": "C-003-A"}]}
     unknown = {"inspection_result": "unable_to_assess", "observation_quality": "poor", "defects": []}
     rework_defect = {"inspection_result": "signs_detected", "observation_quality": "good",
-                     "defects": [{"type": "surface_mark", "area": "flange"}]}
+                     "component_id": "C-005-A", "operation_run_id": "R-005-1",
+                     "defects": [{"type": "surface_mark", "area": "flange", "component_id": "C-005-A"}]}
     late_defect = {"inspection_result": "signs_detected", "observation_quality": "good",
-                   "defects": [{"type": "scratch", "area": "outer"}]}
+                   "component_id": "C-006-A",
+                   "defects": [{"type": "scratch", "area": "outer", "component_id": "C-006-A"}]}
     order_005 = {"external_order_id": "DEMO-ORDER-005", "version": 1, "item_id": "I-005",
                  "item_type": "demo-bracket", "route": ["incoming", "A"], "checkpoints": []}
     order_006 = {"external_order_id": "DEMO-ORDER-006", "version": 1, "item_id": "I-006",
                  "item_type": "demo-bracket", "route": ["incoming", "A"], "checkpoints": []}
     events = [
+        *[sample_event(f"I-{number:03d}", 0, "AssemblyImported", 0,
+                       {"components": ([{"component_id": f"C-{number:03d}-A", "component_type": "demo-bracket-core"},
+                                        {"component_id": "C-001-B", "component_type": "demo-fastener"}]
+                                       if number == 1 else [{"component_id": f"C-{number:03d}-A", "component_type": "demo-bracket-core"}])})
+          for number in range(1, 7)],
         sample_event("I-001", 1, "ItemReceived", 0, {"item_type": "demo-bracket"}),
-        sample_event("I-001", 2, "IncomingInspectionCompleted", 1, normal, "incoming"),
-        sample_event("I-001", 3, "OperationStarted", 5, {"operation_run_id": "R-001-A", "operation": "machining"}, "A", "operator-1"),
+        sample_event("I-001", 2, "IncomingInspectionCompleted", 1, normal | {"component_id": "C-001-A"}, "incoming"),
+        sample_event("I-001", 3, "OperationStarted", 5, {"operation_run_id": "R-001-A", "operation": "machining", "equipment_id": "CNC-01"}, "A", "operator-1"),
         sample_event("I-001", 4, "OperationFinished", 9, {"operation_run_id": "R-001-A"}, "A", "operator-1"),
-        sample_event("I-001", 5, "OperationStarted", 12, {"operation_run_id": "R-001-B", "operation": "assembly"}, "B", "operator-2"),
+        sample_event("I-001", 5, "OperationStarted", 12, {"operation_run_id": "R-001-B", "operation": "assembly", "equipment_id": "ASM-01"}, "B", "operator-2"),
         sample_event("I-001", 6, "OperationFinished", 17, {"operation_run_id": "R-001-B"}, "B", "operator-2"),
-        sample_event("I-001", 7, "InspectionReported", 18, normal, "B"),
+        sample_event("I-001", 7, "InspectionReported", 18, normal | {"component_id": "C-001-A", "operation_run_id": "R-001-B"}, "B"),
         sample_event("I-002", 1, "ItemReceived", 0, {"item_type": "demo-bracket"}),
         sample_event("I-002", 2, "IncomingInspectionCompleted", 2, incoming, "incoming"),
-        sample_event("I-003", 1, "IncomingInspectionCompleted", 1, normal, "incoming"),
-        sample_event("I-003", 2, "OperationStarted", 5, {"operation_run_id": "R-003-A", "operation": "welding"}, "A", "operator-1"),
+        sample_event("I-003", 1, "IncomingInspectionCompleted", 1, normal | {"component_id": "C-003-A"}, "incoming"),
+        sample_event("I-003", 2, "OperationStarted", 5, {"operation_run_id": "R-003-A", "operation": "welding", "equipment_id": "W-01"}, "A", "operator-1"),
         sample_event("I-003", 3, "MachineWarning", 7, {"equipment_id": "W-01", "code": "TEMP_WARN", "operation_run_id": "R-003-A"}, "A"),
         sample_event("I-003", 4, "OperatorActionObserved", 8, {"action": "manual_adjustment", "operation_run_id": "R-003-A", "confidence": 0.7}, "A", "operator-1"),
         sample_event("I-003", 5, "OperationFinished", 10, {"operation_run_id": "R-003-A"}, "A", "operator-1"),
         sample_event("I-003", 6, "InspectionReported", 11, after, "A"),
         sample_event("I-004", 1, "IncomingInspectionCompleted", 3, unknown, "incoming"),
         sample_event("I-005", 1, "WorkOrderReceived", 0, order_005),
-        sample_event("I-005", 2, "IncomingInspectionCompleted", 1, normal, "incoming"),
-        sample_event("I-005", 3, "OperationStarted", 5, {"operation_run_id": "R-005-1", "operation": "machining"}, "A", "operator-1"),
+        sample_event("I-005", 2, "IncomingInspectionCompleted", 1, normal | {"component_id": "C-005-A"}, "incoming"),
+        sample_event("I-005", 3, "OperationStarted", 5, {"operation_run_id": "R-005-1", "operation": "machining", "equipment_id": "CNC-02"}, "A", "operator-1"),
         sample_event("I-005", 4, "OperationFinished", 9, {"operation_run_id": "R-005-1"}, "A", "operator-1"),
         sample_event("I-005", 5, "InspectionReported", 10, rework_defect, "A"),
         sample_event("I-006", 1, "WorkOrderReceived", 0, order_006),
@@ -70,10 +79,12 @@ def seed(store: EventStore) -> None:
                      "Synthetic scenario; manual confirmation for demonstration", 1,
                      f"seed-{case['item_id']}")
     for event in (
+        sample_event("I-005", 9, "ComponentRemoved", 11, {"component_id": "C-005-A"}, "A", "operator-1"),
+        sample_event("I-005", 10, "ComponentInstalled", 12, {"component_id": "C-005-A", "component_type": "demo-bracket-core"}, "A", "operator-1"),
         sample_event("I-005", 6, "ReworkStarted", 12, {"operation_run_id": "R-005-2",
-                     "previous_run_id": "R-005-1", "operation": "rework"}, "A", "operator-1"),
+                     "previous_run_id": "R-005-1", "operation": "rework", "equipment_id": "CNC-02"}, "A", "operator-1"),
         sample_event("I-005", 7, "OperationFinished", 16, {"operation_run_id": "R-005-2"}, "A", "operator-1"),
-        sample_event("I-005", 8, "InspectionReported", 18, normal, "A"),
+        sample_event("I-005", 8, "InspectionReported", 18, normal | {"component_id": "C-005-A", "operation_run_id": "R-005-2"}, "A"),
         sample_event("I-006", 3, "IncomingInspectionCompleted", 2, late_defect, "incoming"),
     ):
         store.ingest(event)

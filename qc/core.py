@@ -26,6 +26,7 @@ EVENT_TYPES = {
     "OperationStarted", "OperationPaused", "OperationResumed", "OperationFinished",
     "ReworkStarted", "InspectionReported", "OperatorActionObserved",
     "MachineStateChanged", "MachineWarning", "MachineStopped", "AssemblyImported",
+    "ComponentInstalled", "ComponentRemoved",
 }
 INSPECTION_TYPES = {"InspectionReported", "IncomingInspectionCompleted"}
 RESULTS = {"signs_detected", "no_signs_detected", "unable_to_assess"}
@@ -66,6 +67,7 @@ def project_runs(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         run_id = payload["operation_run_id"]
         run = runs.setdefault(run_id, {"operation_run_id": run_id, "start": None, "finish": None,
                                        "station_id": None, "operator_alias": None, "operation": None,
+                                       "equipment_id": None,
                                        "previous_run_id": None, "pauses": [], "active_seconds": None,
                                        "elapsed_seconds": None, "incomplete_reason": None})
         timestamp = parse_time(event["occurred_at"])
@@ -74,6 +76,7 @@ def project_runs(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             run["station_id"] = event.get("station_id") or run["station_id"]
             run["operator_alias"] = event.get("operator_alias") or run["operator_alias"]
             run["operation"] = payload.get("operation") or run["operation"]
+            run["equipment_id"] = payload.get("equipment_id") or run["equipment_id"]
             run["previous_run_id"] = payload.get("previous_run_id") or run["previous_run_id"]
         elif kind == "OperationPaused":
             run["pauses"].append([timestamp, None])
@@ -109,6 +112,38 @@ def project_runs(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         run["elapsed_seconds"] = elapsed
         run["active_seconds"] = elapsed - paused
     return sorted(runs.values(), key=lambda item: (item["start"] or "", item["operation_run_id"]))
+
+
+def project_components(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rebuild component membership by event time, retaining every transition."""
+    components: dict[str, dict[str, Any]] = {}
+    for record in events:
+        if record["state"] != "applied":
+            continue
+        event = record["event"]
+        kind = event["event_type"]
+        payload = event["payload"]
+        if kind == "AssemblyImported":
+            for component in payload["components"]:
+                previous = components.get(component["component_id"])
+                components[component["component_id"]] = {
+                    **component, "component_type": component.get("component_type") or component.get("name"),
+                    "installed": True, "transitions": [*(previous["transitions"] if previous else []),
+                    {"event_id": event["event_id"], "at": event["occurred_at"], "action": "imported"}]}
+        elif kind in {"ComponentInstalled", "ComponentRemoved"}:
+            component_id = payload["component_id"]
+            if component_id not in components:
+                components[component_id] = {"component_id": component_id,
+                                             "component_type": payload.get("component_type", "unknown"),
+                                             "installed": False, "transitions": []}
+            component = components[component_id]
+            if kind == "ComponentInstalled" and payload.get("component_type"):
+                component["component_type"] = payload["component_type"]
+            component["installed"] = kind == "ComponentInstalled"
+            component["transitions"].append({"event_id": event["event_id"],
+                                             "at": event["occurred_at"],
+                                             "action": "installed" if component["installed"] else "removed"})
+    return sorted(components.values(), key=lambda item: item["component_id"])
 
 
 class _ProfiledConnection(sqlite3.Connection):
@@ -397,6 +432,21 @@ class EventStore:
                     raise ValueError("invalid checkpoint")
                 parse_time(checkpoint.get("due_at"))
                 seen.add(checkpoint_id)
+        if kind == "AssemblyImported":
+            components = payload.get("components")
+            if (not isinstance(components, list) or not components
+                    or any(not isinstance(c, dict)
+                           or not isinstance(c.get("component_id"), str) or not c["component_id"].strip()
+                           or not isinstance(c.get("component_type") or c.get("name"), str)
+                           or not (c.get("component_type") or c.get("name")).strip()
+                           for c in components)
+                    or len({c["component_id"] for c in components}) != len(components)):
+                raise ValueError("invalid assembly components")
+        if kind in {"ComponentInstalled", "ComponentRemoved"}:
+            if (not isinstance(payload.get("component_id"), str) or not payload["component_id"].strip()
+                    or kind == "ComponentInstalled" and
+                    (not isinstance(payload.get("component_type"), str) or not payload["component_type"].strip())):
+                raise ValueError("invalid component transition")
         if kind in OPERATION_TYPES:
             if not isinstance(payload.get("operation_run_id"), str) or not payload["operation_run_id"].strip():
                 raise ValueError("operation_run_id required")
@@ -404,6 +454,9 @@ class EventStore:
                                              or not payload["previous_run_id"].strip()):
                 raise ValueError("rework requires previous_run_id")
         if kind in INSPECTION_TYPES:
+            for field in ("component_id", "operation_run_id"):
+                if field in payload and (not isinstance(payload[field], str) or not payload[field].strip()):
+                    raise ValueError(f"invalid {field}")
             evidence = payload.get("evidence_image")
             if evidence is not None:
                 if not isinstance(evidence, dict) or set(evidence) != {"mime_type", "data_base64"}:
@@ -436,6 +489,9 @@ class EventStore:
                     raise ValueError("each defect requires type")
                 if "area" in defect and not isinstance(defect["area"], str):
                     raise ValueError("defect area must be string")
+                if "component_id" in defect and (not isinstance(defect["component_id"], str)
+                                                   or not defect["component_id"].strip()):
+                    raise ValueError("invalid defect component_id")
 
     def ingest(self, event: dict[str, Any], profile_id: str | None = None) -> dict[str, Any]:
         if not isinstance(event, dict):
@@ -543,6 +599,7 @@ class EventStore:
                                "reason": row["reason"], "received_at": row["received_at"],
                                "event": event})
             return {"item_id": item_id, "events": events, "operation_runs": project_runs(events),
+                    "components": project_components(events),
                     "checkpoints": self.checkpoints(item_id),
                     "cases": [self._case(r) for r in self.db.execute("SELECT * FROM cases WHERE item_id=?", (item_id,))]}
 
@@ -616,9 +673,15 @@ class EventStore:
                     and any(d["type"] == row["defect_type"] and (d.get("area") or "unspecified") == row["area"]
                             for d in e["payload"].get("defects", []))]
         detection_row, detection = matching[0]
+        component_id = next((d.get("component_id") for d in detection["payload"].get("defects", [])
+                             if d["type"] == row["defect_type"] and
+                             (d.get("area") or "unspecified") == row["area"]),
+                            detection["payload"].get("component_id"))
+        operation_run_id = detection["payload"].get("operation_run_id")
         before = [(r, e) for r, e in evidence_events if r["occurred_at"] < detection_row["occurred_at"]
                   and e["event_type"] in INSPECTION_TYPES
                   and e["payload"]["inspection_result"] == "no_signs_detected"
+                  and (not component_id or e["payload"].get("component_id") == component_id)
                   and e["payload"].get("observation_quality", "unknown") == "good"]
         last_good = before[-1][0] if before else None
         operation_starts = [r for r, e in evidence_events if r["occurred_at"] < detection_row["occurred_at"]
@@ -634,9 +697,13 @@ class EventStore:
             "last_good_ingestion_id": last_good["ingestion_id"] if last_good else None,
             "operation_start_ingestion_id": last_start["ingestion_id"] if last_start else None,
             "machine_ingestion_ids": [r["ingestion_id"] for r, e in nearby
-                                      if e["event_type"] in {"MachineWarning", "MachineStopped"}],
+                                      if e["event_type"] in {"MachineWarning", "MachineStopped"}
+                                      and (not operation_run_id or e["payload"].get("operation_run_id") == operation_run_id)],
             "operator_ingestion_ids": [r["ingestion_id"] for r, e in nearby
-                                       if e["event_type"] == "OperatorActionObserved"],
+                                       if e["event_type"] == "OperatorActionObserved"
+                                       and (not operation_run_id or e["payload"].get("operation_run_id") == operation_run_id)],
+            "component_id": component_id,
+            "operation_run_id": operation_run_id,
         }
         return {"case_id": row["case_id"], "item_id": row["item_id"],
                 "defect_type": row["defect_type"], "area": row["area"],

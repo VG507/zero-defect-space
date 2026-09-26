@@ -20,7 +20,9 @@ EventType = Literal[
     "MachineStateChanged",
     "MachineWarning",
     "MachineStopped",
-    "AssemblyImported"
+    "AssemblyImported",
+    "ComponentInstalled",
+    "ComponentRemoved"
 ]
 
 InspectionResult = Literal["signs_detected", "no_signs_detected", "unable_to_assess"]

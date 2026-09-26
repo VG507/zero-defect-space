@@ -49,7 +49,9 @@
         "MachineStateChanged",
         "MachineWarning",
         "MachineStopped",
-        "AssemblyImported"
+        "AssemblyImported",
+        "ComponentInstalled",
+        "ComponentRemoved"
       ]
     },
     "occurred_at": {

@@ -31,6 +31,9 @@ const lineLabels = {
   no_confirmed_nonconformance: "Нет подтверждённого несоответствия"
 };
 
+const qualityLabels = { good: "хорошо", poor: "плохо", unknown: "неизвестно" };
+const deliveryLabels = { acknowledged: "подтверждено", pending: "ожидает отправки", error: "ошибка отправки" };
+
 const scenarioDescriptions = {
   "I-001": "Штатные операции и пригодный итоговый контроль. Это не автоматический допуск изделия.",
   "I-002": "Признак обнаружен на входе, до последующих операций. Денежный эффект не рассчитывался.",
@@ -73,6 +76,8 @@ function renderCase(item) {
   const head = element("div", "case-head");
   head.append(element("h3", "", `${item.defect_type} · ${item.area}`), element("span", `badge ${item.status}`, labelFor(item.status)));
   card.append(head, element("p", "", `Случай ${item.case_id}. Причина: ${item.cause_status === "unknown" ? "не установлена" : item.cause_status}.`));
+  if (item.context?.component_id || item.context?.operation_run_id)
+    card.append(element("p", "history-note", `Связь наблюдения: компонент ${item.context.component_id || "не указан"}; выполнение операции ${item.context.operation_run_id || "не указано"}.`));
   if (item.context) {
     const descriptions = { incoming_signal: "Признак обнаружен на входном контроле.",
       new_after_last_good_observation: "После последнего пригодного контроля без признаков обнаружен новый сигнал; момент возникновения не доказан.",
@@ -149,6 +154,7 @@ function renderInvestigation(data) {
       timeline.append(entry);
     }
     card.append(timeline);
+    card.append(element("p", "investigation-caution", `Связано с компонентом: ${context.component_id || "не указан"}; с выполнением операции: ${context.operation_run_id || "не указано"}. Возможные альтернативы: входное несоответствие, оборудование, перемещение или недостаток наблюдений; ни одна причина не подтверждена автоматически.`));
     card.append(element("p", "investigation-caution", defectCase.review_required
       ? "После решения поступило более раннее событие. Основания требуют пересмотра; прежнее решение сохранено."
       : "События сопоставлены по времени. Причина дефекта и ответственность человека автоматически не установлены."));
@@ -196,6 +202,15 @@ async function selectItem(itemId) {
     const data = await api(`/api/items/${encodeURIComponent(itemId)}`);
     if (selection !== state.selection) return;
     panel.replaceChildren();
+    panel.append(element("h3", "section-label", "Состав изделия"));
+    if (!data.components.length) panel.append(element("p", "empty", "Состав изделия источником не передан."));
+    for (const component of data.components) {
+      const card = element("article", "component-row");
+      card.append(element("strong", "", `${component.component_id} · ${component.component_type}`),
+                  element("span", "", component.installed ? "В составе изделия" : "Снят с изделия"),
+                  element("small", "", component.transitions.map(change => `${change.action}: ${change.at} (${change.event_id})`).join("; ")));
+      panel.append(card);
+    }
     panel.append(renderInvestigation(data));
     const comparison = renderCostComparison(itemId);
     if (comparison) panel.append(comparison);
@@ -206,7 +221,13 @@ async function selectItem(itemId) {
       row.append(element("h3", "", record.event.event_type));
       row.append(element("small", "", `${record.event.occurred_at} · ${record.event.source_id} · ${record.state}`));
       const payload = record.event.payload;
-      if (payload.inspection_result) row.append(element("p", "", `Контроль: ${payload.inspection_result}; качество: ${payload.observation_quality || "unknown"}.`));
+      const linkage = [record.event.station_id && `участок ${record.event.station_id}`,
+                       record.event.operator_alias && `оператор ${record.event.operator_alias}`,
+                       payload.equipment_id && `оборудование ${payload.equipment_id}`,
+                       payload.operation_run_id && `выполнение ${payload.operation_run_id}`,
+                       payload.component_id && `компонент ${payload.component_id}`].filter(Boolean);
+      if (linkage.length) row.append(element("p", "", linkage.join(" · ")));
+      if (payload.inspection_result) row.append(element("p", "", `Контроль: ${payload.inspection_result}; качество: ${qualityLabels[payload.observation_quality || "unknown"] || "неизвестно"}.`));
       if (payload.defects?.length) row.append(element("p", "", `Признаки: ${payload.defects.map(d => `${d.type} (${d.area || "не указана"})`).join(", ")}`));
       const evidence = payload.evidence_image;
       if (evidence && ["image/jpeg", "image/png"].includes(evidence.mime_type) && /^[A-Za-z0-9+/]+={0,2}$/.test(evidence.data_base64)) {
@@ -236,7 +257,7 @@ async function selectItem(itemId) {
       const description = run.active_seconds === null
         ? `Интервал не рассчитан: ${run.incomplete_reason}.`
         : `Активно: ${run.active_seconds} с; на участке: ${run.elapsed_seconds} с.`;
-      panel.append(element("p", "history-note", `${run.operation_run_id} · ${run.station_id || "участок неизвестен"} · ${description}${run.previous_run_id ? ` Повтор после ${run.previous_run_id}.` : ""}`));
+      panel.append(element("p", "history-note", `${run.operation_run_id} · ${run.operation || "операция не указана"} · участок ${run.station_id || "не указан"} · оператор ${run.operator_alias || "не указан"} · оборудование ${run.equipment_id || "не указано"} · начало ${run.start || "неизвестно"} · конец ${run.finish || "неизвестно"} · паузы ${run.pauses.length} · ${description}${run.previous_run_id ? ` Повтор после ${run.previous_run_id}.` : ""}`));
     }
     panel.append(element("h3", "section-label", "Случаи и решения"));
     if (!data.cases.length) panel.append(element("p", "empty", "Признаков дефекта нет. Это не означает автоматического допуска изделия."));
@@ -265,7 +286,7 @@ async function refresh() {
     for (const message of outbox) {
       const row = element("div", "message");
       row.append(element("code", "", message.payload.item_id), element("code", "", message.message_id),
-                 element("span", `state-${message.state}`, message.state),
+                 element("span", `state-${message.state}`, deliveryLabels[message.state] || message.state),
                  element("span", "", `Попыток: ${message.attempts}`));
       if (message.last_error) row.append(element("small", "", message.last_error));
       exchange.append(row);

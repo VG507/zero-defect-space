@@ -10,7 +10,7 @@
 | `POST /api/events/batch` | source/admin | Атомарно принять массив 1–100 событий (не более 1 МиБ); ответ `202` содержит упорядоченный массив `results` со статусом каждого события. Ошибка идентичности откатывает весь пакет. Карантин и конфликт фиксируются как отдельные результаты, как и при одиночном приёме. |
 | `GET /api/items` | viewer/controller/admin | Изделия с числом сообщений и случаев |
 | `GET /api/line` | viewer/controller/admin | Состояние каждого изделия без автоматического допуска |
-| `GET /api/items/{item_id}` | viewer/controller/admin | Хронология в порядке `occurred_at`, случаи и решения |
+| `GET /api/items/{item_id}` | viewer/controller/admin | Хронология в порядке `occurred_at`, текущий состав и переходы компонентов, выполнения операций, случаи и решения |
 | `GET /api/checkpoints` | viewer/controller/admin | Ожидаемые точки, наблюдения и журнал оповещений |
 | `POST /api/checkpoints/scan` | admin | Явно проверить сроки; тело `{}` или `{"as_of":"..."}` |
 | `GET /api/cases` | viewer/controller/admin | Случаи и история решений |
@@ -33,7 +33,9 @@
   "payload": {
     "inspection_result": "signs_detected",
     "observation_quality": "good",
-    "defects": [{"type": "weld_anomaly", "area": "seam-A"}]
+    "component_id": "C-003-A",
+    "operation_run_id": "R-003-A",
+    "defects": [{"type": "weld_anomaly", "area": "seam-A", "component_id": "C-003-A"}]
   }
 }
 ```

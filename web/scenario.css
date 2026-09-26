@@ -26,6 +26,10 @@
 .evidence { margin: .7rem 0; }
 .evidence img { max-width: min(100%, 420px); max-height: 250px; object-fit: contain; border: 1px solid var(--line); }
 .evidence figcaption { font-size: .78rem; color: var(--muted); }
+.component-row { display: flex; flex-wrap: wrap; gap: .3rem 1rem; padding: .7rem 0; border-bottom: 1px solid var(--line); font-size: .86rem; }
+.component-row strong { font-family: Consolas, monospace; }
+.component-row span { color: var(--teal); font-weight: 650; }
+.component-row small { flex-basis: 100%; color: var(--muted); overflow-wrap: anywhere; }
 .investigation { border: 1px solid var(--line); background: #f5f8f7; padding: 1rem; margin-bottom: 1.2rem; }
 .investigation .section-label, .cost-comparison .section-label { margin-top: 0; }
 .investigation-case + .investigation-case { border-top: 1px solid var(--line); padding-top: 1rem; }

@@ -20,7 +20,7 @@ class DemoTests(unittest.TestCase):
             self.assertEqual(len(bridge.pull_orders()), 4)
             seed(store)
             integrity = store.verify_integrity()
-            self.assertEqual(integrity["checked_events"], 31)
+            self.assertEqual(integrity["checked_events"], 39)
             self.assertTrue(all(integrity[name] for name in
                                 ("valid", "event_digests_verified", "hash_chain_verified", "anchor_verified")))
             self.assertEqual(len(store.items()), 6)
@@ -28,7 +28,12 @@ class DemoTests(unittest.TestCase):
             self.assertEqual(store.metrics()["items_with_confirmed_defect"], 3)
             self.assertEqual(store.metrics()["items_without_usable_inspection"], 1)
             normal = store.history("I-001")
+            self.assertEqual(len(normal["components"]), 2)
+            self.assertEqual(normal["components"][0]["component_id"], "C-001-A")
+            self.assertTrue(normal["components"][0]["installed"])
             self.assertEqual([run["station_id"] for run in normal["operation_runs"]], ["A", "B"])
+            self.assertEqual([run["operator_alias"] for run in normal["operation_runs"]], ["operator-1", "operator-2"])
+            self.assertEqual([run["equipment_id"] for run in normal["operation_runs"]], ["CNC-01", "ASM-01"])
             self.assertEqual([run["active_seconds"] for run in normal["operation_runs"]], [240, 300])
             self.assertEqual(normal["cases"], [])
             incoming = store.history("I-002")["cases"][0]
@@ -38,6 +43,8 @@ class DemoTests(unittest.TestCase):
             self.assertEqual(post["cases"][0]["context"]["classification"], "new_after_last_good_observation")
             self.assertEqual(len(post["cases"][0]["context"]["machine_ingestion_ids"]), 1)
             self.assertEqual(len(post["cases"][0]["context"]["operator_ingestion_ids"]), 1)
+            self.assertEqual(post["cases"][0]["context"]["component_id"], "C-003-A")
+            self.assertEqual(post["cases"][0]["context"]["operation_run_id"], "R-003-A")
             warning = next(record["event"] for record in post["events"]
                            if record["event"]["event_type"] == "MachineWarning")
             self.assertEqual((warning["payload"]["equipment_id"], warning["payload"]["operation_run_id"]),
@@ -46,13 +53,15 @@ class DemoTests(unittest.TestCase):
             rework = store.history("I-005")
             self.assertEqual([run["active_seconds"] for run in rework["operation_runs"]], [240, 240])
             self.assertEqual(rework["operation_runs"][1]["previous_run_id"], "R-005-1")
+            self.assertEqual([change["action"] for change in rework["components"][0]["transitions"]],
+                             ["imported", "removed", "installed"])
             self.assertEqual([d["action"] for d in rework["cases"][0]["decisions"]],
                              ["confirmed", "needs_more_inspection"])
             self.assertEqual(rework["cases"][0]["status"], "needs_more_inspection")
             late = store.history("I-006")
             self.assertEqual([record["event"]["event_id"] for record in late["events"]],
-                             ["I-006-1", "I-006-3", "I-006-2"])
-            self.assertEqual(late["cases"][0]["first_ingestion_id"], late["events"][2]["ingestion_id"])
+                             ["I-006-0", "I-006-1", "I-006-3", "I-006-2"])
+            self.assertEqual(late["cases"][0]["first_ingestion_id"], late["events"][3]["ingestion_id"])
             self.assertEqual(late["cases"][0]["context"]["classification"], "incoming_signal")
             self.assertTrue(late["cases"][0]["review_required"])
             self.assertEqual(len(late["cases"][0]["decisions"]), 1)
@@ -61,6 +70,8 @@ class DemoTests(unittest.TestCase):
             self.assertEqual({row["item_id"]: row["state"] for row in store.line_overview()}["I-004"], "missing_control")
             self.assertEqual([row["state"] for row in bridge.push_results()], ["acknowledged"] * 5)
             self.assertEqual(len(emulator.receipts), 5)
+            self.assertEqual({row["payload"]["item_id"] for row in store.outbox()},
+                             {"I-002", "I-003", "I-005", "I-006"})
         finally:
             emulator.shutdown()
             emulator.server_close()
