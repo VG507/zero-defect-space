@@ -1,0 +1,23 @@
+services:
+  qc-core:
+    build: .
+    container_name: zero-defect-core
+    ports:
+      - "8765:8765"
+    environment:
+      - QC_BIND=0.0.0.0
+      - QC_PORT=8765
+      - QC_CHECKPOINT_SCAN_INTERVAL=5.0
+    restart: unless-stopped
+
+  qc-emulator:
+    build: .
+    container_name: zero-defect-emulator
+    ports:
+      - "8766:8766"
+    command: ["python", "-m", "qc.emulator"]
+    environment:
+      - QC_BIND=0.0.0.0
+      - QC_PORT=8766
+      - QC_INTEGRATION_TOKEN=erp-integration-secret
+    restart: unless-stopped

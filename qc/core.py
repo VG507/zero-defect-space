@@ -138,6 +138,8 @@ class EventStore:
                 ciphertext BLOB NOT NULL,
                 key_id TEXT NOT NULL DEFAULT 'k1',
                 crypto_profile_id TEXT NOT NULL DEFAULT 'AES-256-GCM-v1',
+                prev_hash TEXT NOT NULL DEFAULT 'GENESIS',
+                block_hash TEXT NOT NULL DEFAULT '',
                 UNIQUE(source_id, event_id)
             );
             CREATE INDEX IF NOT EXISTS idx_raw_item ON raw_events(item_id, occurred_at);
@@ -319,12 +321,18 @@ class EventStore:
                 occurred_at = parse_time(event["occurred_at"])
             except ValueError as exc:
                 state, reason, occurred_at = "quarantined", str(exc), None
+            last_row = self.db.execute("SELECT block_hash FROM raw_events ORDER BY rowid DESC LIMIT 1").fetchone()
+            prev_hash = last_row["block_hash"] if last_row and last_row["block_hash"] else "GENESIS"
+            block_data = f"{prev_hash}:{ingestion_id}:{event['source_id']}:{event['event_id']}:{digest}"
+            block_hash = hashlib.sha256(block_data.encode("utf-8")).hexdigest()
+
             self.db.execute(
-                "INSERT INTO raw_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO raw_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ingestion_id, event["source_id"], event["event_id"],
                  event.get("item_id") if isinstance(event.get("item_id"), str) else None,
                  event.get("event_type") if isinstance(event.get("event_type"), str) else None,
-                 occurred_at, utc_now(), digest, nonce, ciphertext, key_id, crypto_profile_id),
+                 occurred_at, utc_now(), digest, nonce, ciphertext, key_id, crypto_profile_id,
+                 prev_hash, block_hash),
             )
             self.db.execute(
                 "INSERT INTO processing_events(ingestion_id,state,reason,at) VALUES (?,?,?,?)",
@@ -601,10 +609,19 @@ class EventStore:
 
     def verify_integrity(self) -> dict[str, Any]:
         with self.lock:
-            rows = self.db.execute("SELECT * FROM raw_events").fetchall()
+            rows = self.db.execute("SELECT * FROM raw_events ORDER BY rowid ASC").fetchall()
+            expected_prev = "GENESIS"
             for row in rows:
                 self._decode(row)
-            return {"checked_events": len(rows), "valid": True}
+                if "block_hash" in row.keys() and row["block_hash"]:
+                    if row["prev_hash"] != expected_prev:
+                        raise ValueError(f"hash chain broken at {row['ingestion_id']}: expected prev {expected_prev}, got {row['prev_hash']}")
+                    block_data = f"{expected_prev}:{row['ingestion_id']}:{row['source_id']}:{row['event_id']}:{row['digest']}"
+                    actual_hash = hashlib.sha256(block_data.encode("utf-8")).hexdigest()
+                    if actual_hash != row["block_hash"]:
+                        raise ValueError(f"block hash mismatch at {row['ingestion_id']}")
+                    expected_prev = actual_hash
+            return {"checked_events": len(rows), "valid": True, "hash_chain_verified": True}
 
     def close(self) -> None:
         self.db.close()

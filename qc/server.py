@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
+import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -13,10 +16,35 @@ from qc.core import EventStore
 
 
 class AppServer(ThreadingHTTPServer):
-    def __init__(self, address, store: EventStore, tokens: dict[str, str]):
+    def __init__(self, address, store: EventStore, tokens: dict[str, str], tls_cert: str | None = None, tls_key: str | None = None, auto_scan_interval: float = 0.0):
         super().__init__(address, AppHandler)
         self.store = store
         self.tokens = tokens
+        self._stop_scheduler = threading.Event()
+        self._scheduler_thread = None
+
+        if tls_cert and tls_key and os.path.exists(tls_cert) and os.path.exists(tls_key):
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(certfile=tls_cert, keyfile=tls_key)
+            self.socket = ctx.wrap_socket(self.socket, server_side=True)
+
+        if auto_scan_interval > 0:
+            def _scheduler_loop():
+                while not self._stop_scheduler.is_set():
+                    try:
+                        self.store.scan_checkpoints()
+                    except Exception:
+                        pass
+                    self._stop_scheduler.wait(timeout=auto_scan_interval)
+
+            self._scheduler_thread = threading.Thread(target=_scheduler_loop, daemon=True)
+            self._scheduler_thread.start()
+
+    def server_close(self) -> None:
+        self._stop_scheduler.set()
+        if self._scheduler_thread and self._scheduler_thread.is_alive():
+            self._scheduler_thread.join(timeout=1.0)
+        super().server_close()
 
 
 class AppHandler(BaseHTTPRequestHandler):
@@ -155,11 +183,16 @@ def serve() -> None:
     store = EventStore(os.environ.get("QC_DB_PATH", "qc-demo.db"), key)
     host = os.environ.get("QC_BIND", "127.0.0.1")
     port = int(os.environ.get("QC_PORT", "8765"))
-    server = AppServer((host, port), store, names)
-    print(f"Zero Defect Space demo listening at http://{host}:{port}", flush=True)
+    tls_cert = os.environ.get("QC_TLS_CERT")
+    tls_key = os.environ.get("QC_TLS_KEY")
+    scan_interval = float(os.environ.get("QC_CHECKPOINT_SCAN_INTERVAL", "0"))
+    server = AppServer((host, port), store, names, tls_cert=tls_cert, tls_key=tls_key, auto_scan_interval=scan_interval)
+    protocol = "https" if (tls_cert and tls_key) else "http"
+    print(f"Zero Defect Space demo listening at {protocol}://{host}:{port}", flush=True)
     try:
         server.serve_forever()
     finally:
+        server.server_close()
         store.close()
 
 

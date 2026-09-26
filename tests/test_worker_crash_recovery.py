@@ -28,38 +28,39 @@ class WorkerCrashRecoveryTests(unittest.TestCase):
     def test_aborted_transaction_rolls_back_cleanly(self):
         store = EventStore(self.db_path, self.key_b64)
 
-        # 1. Normal committed event
-        ev1 = {
-            "schema_version": 1,
-            "source_id": "sensor-1",
-            "event_id": "evt-committed-1",
-            "item_id": "ITEM-CRASH-1",
-            "event_type": "ItemReceived",
-            "occurred_at": "2026-09-25T10:00:00+03:00",
-            "payload": {"status": "ok"},
-        }
-        res1 = store.ingest(ev1)
-        self.assertEqual(res1["state"], "applied")
-
-        # 2. Simulate worker crash/exception inside active transaction
         try:
-            with store.transaction():
-                # Manually insert partial unverified row
-                store.db.execute(
-                    "INSERT INTO cases(case_id, item_id, defect_type, area, first_ingestion_id) "
-                    "VALUES ('partial-case', 'ITEM-CRASH-1', 'scratch', 'zone-x', ?)",
-                    (res1["ingestion_id"],)
-                )
-                # Simulate unhandled worker kill / exception before commit
-                raise RuntimeError("WORKER_SIMULATED_CRASH")
-        except RuntimeError:
-            pass  # Worker died
+            # 1. Normal committed event
+            ev1 = {
+                "schema_version": 1,
+                "source_id": "sensor-1",
+                "event_id": "evt-committed-1",
+                "item_id": "ITEM-CRASH-1",
+                "event_type": "ItemReceived",
+                "occurred_at": "2026-09-25T10:00:00+03:00",
+                "payload": {"status": "ok"},
+            }
+            res1 = store.ingest(ev1)
+            self.assertEqual(res1["state"], "applied")
 
-        # 3. Verify clean rollback
-        partial = store.db.execute("SELECT * FROM cases WHERE case_id='partial-case'").fetchone()
-        self.assertIsNone(partial, "Uncommitted transaction must not leave partial state in database")
+            # 2. Simulate worker crash/exception inside active transaction
+            try:
+                with store.transaction():
+                    # Manually insert partial unverified row
+                    store.db.execute(
+                        "INSERT INTO cases(case_id, item_id, defect_type, area, first_ingestion_id) "
+                        "VALUES ('partial-case', 'ITEM-CRASH-1', 'scratch', 'zone-x', ?)",
+                        (res1["ingestion_id"],)
+                    )
+                    # Simulate unhandled worker kill / exception before commit
+                    raise RuntimeError("WORKER_SIMULATED_CRASH")
+            except RuntimeError:
+                pass  # Worker died
 
-        store.close()
+            # 3. Verify clean rollback
+            partial = store.db.execute("SELECT * FROM cases WHERE case_id='partial-case'").fetchone()
+            self.assertIsNone(partial, "Uncommitted transaction must not leave partial state in database")
+        finally:
+            store.close()
 
     def test_worker_restart_and_idempotent_replay(self):
         # 1. Worker 1 initializes and processes items
@@ -86,22 +87,22 @@ class WorkerCrashRecoveryTests(unittest.TestCase):
 
         # 2. Worker 2 starts up against the exact same DB file
         worker2 = EventStore(self.db_path, self.key_b64)
+        try:
+            # Integrity check passes immediately after recovery
+            integ = worker2.verify_integrity()
+            self.assertEqual(integ["checked_events"], 5)
+            self.assertTrue(integ["valid"])
 
-        # Integrity check passes immediately after recovery
-        integ = worker2.verify_integrity()
-        self.assertEqual(integ["checked_events"], 5)
-        self.assertTrue(integ["valid"])
+            # 3. Replay of the same batch to Worker 2 must be 100% idempotent
+            for ev in event_batch:
+                res = worker2.ingest(ev)
+                self.assertEqual(res["state"], "duplicate", "Replayed events must be recognized as duplicates without side-effects")
 
-        # 3. Replay of the same batch to Worker 2 must be 100% idempotent
-        for ev in event_batch:
-            res = worker2.ingest(ev)
-            self.assertEqual(res["state"], "duplicate", "Replayed events must be recognized as duplicates without side-effects")
-
-        # Confirm count of items in DB did not double
-        count = worker2.db.execute("SELECT COUNT(*) as cnt FROM raw_events").fetchone()["cnt"]
-        self.assertEqual(count, 5, "Database must still contain exactly 5 events")
-
-        worker2.close()
+            # Confirm count of items in DB did not double
+            count = worker2.db.execute("SELECT COUNT(*) as cnt FROM raw_events").fetchone()["cnt"]
+            self.assertEqual(count, 5, "Database must still contain exactly 5 events")
+        finally:
+            worker2.close()
 
 
 if __name__ == "__main__":
