@@ -127,7 +127,8 @@ def main() -> None:
         print(f"{r['workers']:<10} | {r['events_per_sec']:>7} evt/s | {r['p50_ms']:>8}ms | {r['p95_ms']:>8}ms | {r['p99_ms']:>8}ms | Valid: {integ['valid']} ({integ['checked_events']} records)")
     print("-----------------------------------------------------------------")
     print(f"Dataset applied: {res1['states'].get('applied', 0)}, duplicates deduplicated: {res1['states'].get('duplicate', 0)}")
-    print("No race conditions, no deadlocks, 100% cryptographic integrity verified.\n")
+    print("Integrity verified for the measured datasets; throughput is environment-dependent.")
+    print("SQLite serializes writes in this implementation; worker count is not a scalability guarantee.\n")
 
 
 if __name__ == "__main__":

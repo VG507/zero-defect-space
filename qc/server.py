@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import argparse
 import os
 import ssl
 import threading
@@ -13,19 +14,26 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from qc.core import EventStore
+from qc.crypto import keyring_from_environment
 
 
 class AppServer(ThreadingHTTPServer):
     def __init__(self, address, store: EventStore, tokens: dict[str, str], tls_cert: str | None = None, tls_key: str | None = None, auto_scan_interval: float = 0.0):
+        if bool(tls_cert) != bool(tls_key):
+            raise ValueError("TLS certificate and key must be provided together")
+        ctx = None
+        if tls_cert and tls_key:
+            if not os.path.isfile(tls_cert) or not os.path.isfile(tls_key):
+                raise FileNotFoundError("TLS certificate or key not found")
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(certfile=tls_cert, keyfile=tls_key)
         super().__init__(address, AppHandler)
         self.store = store
         self.tokens = tokens
         self._stop_scheduler = threading.Event()
         self._scheduler_thread = None
 
-        if tls_cert and tls_key and os.path.exists(tls_cert) and os.path.exists(tls_key):
-            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            ctx.load_cert_chain(certfile=tls_cert, keyfile=tls_key)
+        if ctx is not None:
             self.socket = ctx.wrap_socket(self.socket, server_side=True)
 
         if auto_scan_interval > 0:
@@ -174,17 +182,21 @@ class AppHandler(BaseHTTPRequestHandler):
 
 
 def serve() -> None:
+    parser = argparse.ArgumentParser(description="Quality-control HTTP server")
+    parser.add_argument("--ssl-cert", default=os.environ.get("QC_TLS_CERT"))
+    parser.add_argument("--ssl-key", default=os.environ.get("QC_TLS_KEY"))
+    args = parser.parse_args()
     key = os.environ.get("QC_ENCRYPTION_KEY")
     if not key:
         raise SystemExit("QC_ENCRYPTION_KEY is required")
     names = {role: os.environ.get(f"QC_{role.upper()}_TOKEN") for role in ("source", "viewer", "controller", "admin")}
     if any(not value for value in names.values()) or len(set(names.values())) != 4:
         raise SystemExit("four distinct QC_SOURCE/VIEWER/CONTROLLER/ADMIN_TOKEN values are required")
-    store = EventStore(os.environ.get("QC_DB_PATH", "qc-demo.db"), key)
+    store = EventStore(os.environ.get("QC_DB_PATH", "qc-demo.db"), keyring_from_environment(key))
     host = os.environ.get("QC_BIND", "127.0.0.1")
     port = int(os.environ.get("QC_PORT", "8765"))
-    tls_cert = os.environ.get("QC_TLS_CERT")
-    tls_key = os.environ.get("QC_TLS_KEY")
+    tls_cert = args.ssl_cert
+    tls_key = args.ssl_key
     scan_interval = float(os.environ.get("QC_CHECKPOINT_SCAN_INTERVAL", "0"))
     server = AppServer((host, port), store, names, tls_cert=tls_cert, tls_key=tls_key, auto_scan_interval=scan_interval)
     protocol = "https" if (tls_cert and tls_key) else "http"

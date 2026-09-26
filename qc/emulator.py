@@ -44,6 +44,9 @@ class EmulatorHandler(BaseHTTPRequestHandler):
         return True
 
     def do_GET(self):
+        if self.path == "/health":
+            self._respond(HTTPStatus.OK, {"status": "ok"})
+            return
         if not self._auth():
             return
         if self.path == "/work-orders":
@@ -91,8 +94,9 @@ def main():
     if not token:
         raise SystemExit("QC_INTEGRATION_TOKEN is required")
     port = int(os.environ.get("QC_EMULATOR_PORT", "8766"))
-    server = EmulatorServer(("127.0.0.1", port), token)
-    print(f"Synthetic ERP emulator listening at http://127.0.0.1:{port}", flush=True)
+    host = os.environ.get("QC_BIND", "127.0.0.1")
+    server = EmulatorServer((host, port), token)
+    print(f"Synthetic ERP emulator listening at http://{host}:{port}", flush=True)
     try:
         server.serve_forever()
     finally:

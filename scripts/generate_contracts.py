@@ -13,6 +13,34 @@ PY_OUT = ROOT / "qc" / "contracts.py"
 TS_OUT = ROOT / "web" / "contracts.d.ts"
 
 
+def _python_fields(schema: dict) -> str:
+    required = set(schema["required"])
+    lines = []
+    for name, spec in schema["properties"].items():
+        if "const" in spec:
+            kind = f"Literal[{spec['const']}]"
+        elif name == "event_type":
+            kind = "EventType"
+        else:
+            kind = {"string": "str", "integer": "int", "object": "dict[str, Any]"}[spec["type"]]
+        lines.append(f"    {name}: {'Required' if name in required else 'NotRequired'}[{kind}]")
+    return "\n".join(lines)
+
+
+def _typescript_fields(schema: dict) -> str:
+    required = set(schema["required"])
+    lines = []
+    for name, spec in schema["properties"].items():
+        if "const" in spec:
+            kind = str(spec["const"])
+        elif name == "event_type":
+            kind = "EventType"
+        else:
+            kind = {"string": "string", "integer": "number", "object": "Record<string, unknown>"}[spec["type"]]
+        lines.append(f"  {name}{'' if name in required else '?'}: {kind};")
+    return "\n".join(lines)
+
+
 def generate_python() -> str:
     schema_v1 = json.loads((CONTRACTS_DIR / "event-v1.schema.json").read_text(encoding="utf-8"))
     schema_v2 = json.loads((CONTRACTS_DIR / "event-v2.schema.json").read_text(encoding="utf-8"))
@@ -20,13 +48,14 @@ def generate_python() -> str:
     event_types = schema_v1["properties"]["event_type"]["enum"]
     event_types_repr = ",\n    ".join(f'"{t}"' for t in event_types)
 
+    fields_v1, fields_v2 = _python_fields(schema_v1), _python_fields(schema_v2)
     content = f'''"""AUTO-GENERATED from contracts/event-v1.schema.json and event-v2.schema.json.
 DO NOT EDIT MANUALLY. Run: python scripts/generate_contracts.py
 """
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, Required, TypedDict
 
 EventType = Literal[
     {event_types_repr}
@@ -50,29 +79,11 @@ class InspectionPayload(TypedDict, total=False):
 
 
 class IngestionEventV1(TypedDict, total=False):
-    schema_version: Literal[1]
-    source_id: str
-    event_id: str
-    item_id: str
-    event_type: EventType
-    occurred_at: str
-    station_id: str
-    operator_alias: str
-    payload: dict[str, Any]
+{fields_v1}
 
 
 class IngestionEventV2(TypedDict, total=False):
-    schema_version: Literal[2]
-    source_id: str
-    event_id: str
-    item_id: str
-    event_type: EventType
-    occurred_at: str
-    station_id: str
-    operator_alias: str
-    source_firmware_version: str
-    device_telemetry: dict[str, Any]
-    payload: dict[str, Any]
+{fields_v2}
 
 
 class ControllerDecisionRequest(TypedDict):
@@ -93,9 +104,11 @@ class IngestionResponse(TypedDict, total=False):
 
 def generate_typescript() -> str:
     schema_v1 = json.loads((CONTRACTS_DIR / "event-v1.schema.json").read_text(encoding="utf-8"))
+    schema_v2 = json.loads((CONTRACTS_DIR / "event-v2.schema.json").read_text(encoding="utf-8"))
     event_types = schema_v1["properties"]["event_type"]["enum"]
     event_types_ts = " | ".join(f'"{t}"' for t in event_types)
 
+    fields_v1, fields_v2 = _typescript_fields(schema_v1), _typescript_fields(schema_v2)
     content = f'''/**
  * AUTO-GENERATED from contracts/event-v1.schema.json and event-v2.schema.json.
  * DO NOT EDIT MANUALLY. Run: python scripts/generate_contracts.py
@@ -120,29 +133,11 @@ export interface InspectionPayload {{
 }}
 
 export interface IngestionEventV1 {{
-  schema_version: 1;
-  source_id: string;
-  event_id: string;
-  item_id: string;
-  event_type: EventType;
-  occurred_at: string;
-  station_id?: string;
-  operator_alias?: string;
-  payload: Record<string, unknown>;
+{fields_v1}
 }}
 
 export interface IngestionEventV2 {{
-  schema_version: 2;
-  source_id: string;
-  event_id: string;
-  item_id: string;
-  event_type: EventType;
-  occurred_at: string;
-  station_id?: string;
-  operator_alias?: string;
-  source_firmware_version?: string;
-  device_telemetry?: Record<string, unknown>;
-  payload: Record<string, unknown>;
+{fields_v2}
 }}
 
 export interface ControllerDecisionRequest {{

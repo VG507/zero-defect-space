@@ -7,6 +7,7 @@ import threading
 
 from qc.bridge import Bridge
 from qc.core import EventStore
+from qc.crypto import keyring_from_environment
 from qc.emulator import EmulatorServer
 from qc.server import AppServer
 
@@ -57,7 +58,7 @@ def seed(store: EventStore) -> None:
 
 def main() -> None:
     key = base64.b64encode(os.urandom(32)).decode()
-    store = EventStore(":memory:", key)
+    store = EventStore(":memory:", keyring_from_environment(key))
     integration_token = secrets.token_urlsafe(20)
     emulator = EmulatorServer(("127.0.0.1", 0), integration_token)
     emulator_thread = threading.Thread(target=emulator.serve_forever, daemon=True)
@@ -70,8 +71,9 @@ def main() -> None:
     tokens = {role: os.environ.get(f"QC_DEMO_{role.upper()}_TOKEN") or secrets.token_urlsafe(20)
               for role in ("source", "viewer", "controller", "admin")}
     port = int(os.environ.get("QC_PORT", "8765"))
-    server = AppServer(("127.0.0.1", port), store, tokens)
-    print(f"Demo: http://127.0.0.1:{port}", flush=True)
+    host = os.environ.get("QC_BIND", "127.0.0.1")
+    server = AppServer((host, port), store, tokens)
+    print(f"Demo: http://{host}:{port}", flush=True)
     print(f"Viewer token: {tokens['viewer']}", flush=True)
     print(f"Controller token: {tokens['controller']}", flush=True)
     print(f"Integration: {len(delivery)} result(s) acknowledged by separate HTTP emulator", flush=True)

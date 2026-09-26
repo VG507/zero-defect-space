@@ -8,6 +8,7 @@ sys.path.insert(0, str(ROOT))
 from scripts.verify_contracts import (
     verify_backwards_compatibility,
     verify_generated_code_up_to_date,
+    verify_openapi_schema_links,
 )
 
 
@@ -23,6 +24,9 @@ class ContractSyncTests(unittest.TestCase):
             verify_backwards_compatibility(),
             "Breaking changes detected between V1 and V2 contracts.",
         )
+
+    def test_openapi_reuses_versioned_schema(self):
+        self.assertTrue(verify_openapi_schema_links())
 
 
 if __name__ == "__main__":

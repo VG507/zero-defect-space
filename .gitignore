@@ -3,6 +3,10 @@ __pycache__/
 *.db
 *.db-shm
 *.db-wal
+*.audit-anchor
+*.audit-anchor.tmp
+demo/recordings/
+.playwright-browsers/
 dashboard-smoke.png
 .venv/
 .agents/

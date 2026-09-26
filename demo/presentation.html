@@ -51,16 +51,16 @@
       <p style="font-size: 1.6rem; color: var(--accent-light);">Сквозной защищённый контур контроля качества деталей и прослеживаемости инцидентов</p>
       <div style="margin-top: 40px; display: flex; gap: 40px;">
         <div>
-          <div class="stat-badge">20 / 20</div>
-          <div style="color: var(--text-muted);">Исполняемых тестов (S1–S12)</div>
+          <div class="stat-badge">S1–S12</div>
+          <div style="color: var(--text-muted);">Сценарная матрица тестов</div>
         </div>
         <div>
-          <div class="stat-badge">1400+</div>
-          <div style="color: var(--text-muted);">Событий/сек в стресс-тесте</div>
+          <div class="stat-badge">1 / 4 / 8</div>
+          <div style="color: var(--text-muted);">Измеряемые конфигурации воркеров</div>
         </div>
         <div>
-          <div class="stat-badge">AES + PQ</div>
-          <div style="color: var(--text-muted);">Долгосрочная криптозащита</div>
+          <div class="stat-badge">AES + ML-KEM</div>
+          <div style="color: var(--text-muted);">Гибридный профиль по выбору</div>
         </div>
       </div>
     </div>
@@ -97,7 +97,7 @@
           <ul>
             <li><strong>I-001:</strong> Годное изделие — эталонный технологический цикл.</li>
             <li><strong>I-002:</strong> Входной брак заготовки — система отделяет вину поставщика от оператора последующего участка.</li>
-            <li><strong>I-003:</strong> Дефект после обработки — корреляция с сигналом станка (вибрация шпинделя) и действием человека.</li>
+            <li><strong>I-003:</strong> Признак после сварки — предупреждение TEMP_WARN и действие manual_adjustment как контекст, не доказанная причина.</li>
           </ul>
         </div>
         <div class="card">
@@ -119,7 +119,7 @@
           <h3>Долгосрочная криптозащита (PQC)</h3>
           <ul>
             <li><strong>KeyRing & Ротация:</strong> Чтение исторических данных при плановой смене ключей шифрования.</li>
-            <li><strong>Hybrid Post-Quantum KEM:</strong> Инкапсуляция симметричных ключей (защита от угрозы Store-Now-Decrypt-Later).</li>
+            <li><strong>Гибридный HPKE:</strong> ML-KEM-768/X25519 — опциональный профиль; промышленные гарантии не заявляются.</li>
             <li><strong>Детекция подделок:</strong> Несовпадение тега аутентифицированного шифрования сразу бракует запись.</li>
           </ul>
         </div>
@@ -128,7 +128,7 @@
           <ul>
             <li><strong>Transactional Outbox:</strong> Запись решения контролёра и исходящей квитанции в одной транзакции.</li>
             <li><strong>Устойчивость к отказам:</strong> Сбой эмулятора (503) вызывает повтор с тем же `message_id` до получения ACK.</li>
-            <li><strong>Внешние адаптеры:</strong> Подключение источника OPC-UA / ЧПУ без изменения ядра системы.</li>
+            <li><strong>Внешние адаптеры:</strong> Преобразование синтетической OPC-UA/ЧПУ телеметрии без проверенного подключения к оборудованию.</li>
           </ul>
         </div>
       </div>

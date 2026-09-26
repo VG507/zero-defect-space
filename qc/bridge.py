@@ -55,7 +55,8 @@ def main():
     key, token = os.environ.get("QC_ENCRYPTION_KEY"), os.environ.get("QC_INTEGRATION_TOKEN")
     if not key or not token:
         raise SystemExit("QC_ENCRYPTION_KEY and QC_INTEGRATION_TOKEN are required")
-    store = EventStore(os.environ.get("QC_DB_PATH", "qc-demo.db"), key)
+    from qc.crypto import keyring_from_environment
+    store = EventStore(os.environ.get("QC_DB_PATH", "qc-demo.db"), keyring_from_environment(key))
     try:
         bridge = Bridge(store, os.environ.get("QC_EMULATOR_URL", "http://127.0.0.1:8766"), token)
         result = bridge.pull_orders() if sys.argv[1] == "pull" else bridge.push_results()

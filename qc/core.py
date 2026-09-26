@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import sqlite3
@@ -116,12 +117,23 @@ class EventStore:
         else:
             self.key_ring = KeyRing.from_single_key(key_b64)
         self.cipher = self.key_ring.get_cipher(self.key_ring.primary_key_id)
+        self.anchor_path = None if str(db_path) == ":memory:" else Path(str(db_path) + ".audit-anchor")
         self.db = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
         self.lock = threading.RLock()
+        old_table = self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='raw_events'").fetchone()
+        if old_table and self.anchor_path is not None and not self.anchor_path.exists():
+            if self.db.execute("SELECT COUNT(*) FROM raw_events").fetchone()[0]:
+                self.db.close()
+                raise ValueError("audit anchor missing for nonempty database; explicit migration required")
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA journal_mode=WAL")
         self._schema()
+        self._memory_anchor: dict[str, Any] | None = None
+        if self.anchor_path is None or not self.anchor_path.exists():
+            if self.db.execute("SELECT COUNT(*) FROM raw_events").fetchone()[0]:
+                raise ValueError("audit anchor missing for nonempty database; explicit migration required")
+            self._write_anchor()
 
     def _schema(self) -> None:
         self.db.executescript("""
@@ -140,6 +152,7 @@ class EventStore:
                 crypto_profile_id TEXT NOT NULL DEFAULT 'AES-256-GCM-v1',
                 prev_hash TEXT NOT NULL DEFAULT 'GENESIS',
                 block_hash TEXT NOT NULL DEFAULT '',
+                hash_version INTEGER NOT NULL DEFAULT 1,
                 UNIQUE(source_id, event_id)
             );
             CREATE INDEX IF NOT EXISTS idx_raw_item ON raw_events(item_id, occurred_at);
@@ -198,18 +211,63 @@ class EventStore:
                 FOREIGN KEY(evidence_ingestion_id) REFERENCES raw_events(ingestion_id)
             );
         """)
+        if "hash_version" not in {row[1] for row in self.db.execute("PRAGMA table_info(raw_events)")}:
+            self.db.execute("ALTER TABLE raw_events ADD COLUMN hash_version INTEGER NOT NULL DEFAULT 1")
+
+    @staticmethod
+    def _row_hash(row: dict[str, Any]) -> str:
+        fields = {key: row[key] for key in (
+            "ingestion_id", "source_id", "event_id", "item_id", "event_type", "occurred_at",
+            "received_at", "digest", "key_id", "crypto_profile_id", "prev_hash", "hash_version"
+        )}
+        fields["nonce"] = base64.b64encode(row["nonce"]).decode("ascii")
+        fields["ciphertext"] = base64.b64encode(row["ciphertext"]).decode("ascii")
+        return hashlib.sha256(canonical(fields)).hexdigest()
+
+    def _anchor_state(self) -> dict[str, Any]:
+        row = self.db.execute("SELECT block_hash FROM raw_events ORDER BY rowid DESC LIMIT 1").fetchone()
+        count = self.db.execute("SELECT COUNT(*) FROM raw_events").fetchone()[0]
+        state = {"count": count, "head": row["block_hash"] if row else "GENESIS", "key_id": "k1"}
+        key = self.key_ring.keys[state["key_id"]]
+        state["mac"] = hmac.new(key, canonical(state), hashlib.sha256).hexdigest()
+        return state
+
+    def _read_anchor(self) -> dict[str, Any]:
+        if self.anchor_path is None:
+            return self._memory_anchor or {}
+        if not self.anchor_path.exists():
+            raise ValueError("audit anchor missing")
+        return json.loads(self.anchor_path.read_text(encoding="utf-8"))
+
+    def _check_anchor(self) -> None:
+        expected = self._anchor_state()
+        if not hmac.compare_digest(canonical(self._read_anchor()), canonical(expected)):
+            raise ValueError("audit anchor mismatch: database or anchor was changed")
+
+    def _write_anchor(self) -> None:
+        state = self._anchor_state()
+        if self.anchor_path is None:
+            self._memory_anchor = state
+            return
+        temporary = self.anchor_path.with_name(self.anchor_path.name + ".tmp")
+        temporary.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+        os.replace(temporary, self.anchor_path)
 
     @contextmanager
     def transaction(self):
         with self.lock:
             self.db.execute("BEGIN IMMEDIATE")
             try:
+                self._check_anchor()
+                before = self._anchor_state()
                 yield
             except BaseException:
                 self.db.execute("ROLLBACK")
                 raise
             else:
                 self.db.execute("COMMIT")
+                if self._anchor_state() != before:
+                    self._write_anchor()
 
     def _decode(self, row: sqlite3.Row) -> dict[str, Any]:
         aad = canonical({"source_id": row["source_id"], "event_id": row["event_id"]})
@@ -225,6 +283,29 @@ class EventStore:
         version = event.get("schema_version")
         if type(version) is not int or version not in (1, 2):
             raise ValueError("unsupported schema_version")
+        schema_path = Path(__file__).parent.parent / "contracts" / f"event-v{version}.schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        missing = set(schema["required"]) - set(event)
+        if missing:
+            raise ValueError(f"missing contract fields: {sorted(missing)}")
+        extra = set(event) - set(schema["properties"])
+        if extra and not schema.get("additionalProperties", True):
+            raise ValueError(f"unexpected contract fields: {sorted(extra)}")
+        for name, value in event.items():
+            spec = schema["properties"].get(name, {})
+            expected_type = spec.get("type")
+            if expected_type == "string" and not isinstance(value, str):
+                raise ValueError(f"{name} must be string")
+            if expected_type == "object" and not isinstance(value, dict):
+                raise ValueError(f"{name} must be object")
+            if expected_type == "integer" and type(value) is not int:
+                raise ValueError(f"{name} must be integer")
+            if "minLength" in spec and len(value) < spec["minLength"]:
+                raise ValueError(f"{name} too short")
+            if "const" in spec and value != spec["const"]:
+                raise ValueError(f"{name} differs from schema const")
+            if "enum" in spec and value not in spec["enum"]:
+                raise ValueError(f"{name} outside schema enum")
         kind = event.get("event_type")
         if not isinstance(kind, str) or kind not in EVENT_TYPES:
             raise ValueError("unsupported event_type")
@@ -323,16 +404,22 @@ class EventStore:
                 state, reason, occurred_at = "quarantined", str(exc), None
             last_row = self.db.execute("SELECT block_hash FROM raw_events ORDER BY rowid DESC LIMIT 1").fetchone()
             prev_hash = last_row["block_hash"] if last_row and last_row["block_hash"] else "GENESIS"
-            block_data = f"{prev_hash}:{ingestion_id}:{event['source_id']}:{event['event_id']}:{digest}"
-            block_hash = hashlib.sha256(block_data.encode("utf-8")).hexdigest()
+            received_at = utc_now()
+            row_data = {"ingestion_id": ingestion_id, "source_id": event["source_id"],
+                        "event_id": event["event_id"],
+                        "item_id": event.get("item_id") if isinstance(event.get("item_id"), str) else None,
+                        "event_type": event.get("event_type") if isinstance(event.get("event_type"), str) else None,
+                        "occurred_at": occurred_at, "received_at": received_at, "digest": digest,
+                        "nonce": nonce, "ciphertext": ciphertext, "key_id": key_id,
+                        "crypto_profile_id": crypto_profile_id, "prev_hash": prev_hash, "hash_version": 2}
+            block_hash = self._row_hash(row_data)
 
             self.db.execute(
-                "INSERT INTO raw_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO raw_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ingestion_id, event["source_id"], event["event_id"],
-                 event.get("item_id") if isinstance(event.get("item_id"), str) else None,
-                 event.get("event_type") if isinstance(event.get("event_type"), str) else None,
-                 occurred_at, utc_now(), digest, nonce, ciphertext, key_id, crypto_profile_id,
-                 prev_hash, block_hash),
+                 row_data["item_id"], row_data["event_type"],
+                 occurred_at, received_at, digest, nonce, ciphertext, key_id, crypto_profile_id,
+                 prev_hash, block_hash, 2),
             )
             self.db.execute(
                 "INSERT INTO processing_events(ingestion_id,state,reason,at) VALUES (?,?,?,?)",
@@ -609,6 +696,7 @@ class EventStore:
 
     def verify_integrity(self) -> dict[str, Any]:
         with self.lock:
+            self._check_anchor()
             rows = self.db.execute("SELECT * FROM raw_events ORDER BY rowid ASC").fetchall()
             expected_prev = "GENESIS"
             for row in rows:
@@ -616,11 +704,18 @@ class EventStore:
                 if "block_hash" in row.keys() and row["block_hash"]:
                     if row["prev_hash"] != expected_prev:
                         raise ValueError(f"hash chain broken at {row['ingestion_id']}: expected prev {expected_prev}, got {row['prev_hash']}")
-                    block_data = f"{expected_prev}:{row['ingestion_id']}:{row['source_id']}:{row['event_id']}:{row['digest']}"
-                    actual_hash = hashlib.sha256(block_data.encode("utf-8")).hexdigest()
+                    if row["hash_version"] == 2:
+                        actual_hash = self._row_hash(dict(row))
+                    elif row["hash_version"] == 1:
+                        block_data = f"{expected_prev}:{row['ingestion_id']}:{row['source_id']}:{row['event_id']}:{row['digest']}"
+                        actual_hash = hashlib.sha256(block_data.encode("utf-8")).hexdigest()
+                    else:
+                        raise ValueError(f"unsupported hash version {row['hash_version']}")
                     if actual_hash != row["block_hash"]:
                         raise ValueError(f"block hash mismatch at {row['ingestion_id']}")
                     expected_prev = actual_hash
+            if expected_prev != self._anchor_state()["head"]:
+                raise ValueError("audit head mismatch")
             return {"checked_events": len(rows), "valid": True, "hash_chain_verified": True}
 
     def close(self) -> None:

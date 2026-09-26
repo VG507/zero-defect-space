@@ -1,23 +1,38 @@
 services:
   qc-core:
     build: .
-    container_name: zero-defect-core
     ports:
-      - "8765:8765"
+      - "127.0.0.1:8765:8765"
     environment:
-      - QC_BIND=0.0.0.0
-      - QC_PORT=8765
-      - QC_CHECKPOINT_SCAN_INTERVAL=5.0
+      QC_ENCRYPTION_KEY: ${QC_ENCRYPTION_KEY:?set QC_ENCRYPTION_KEY}
+      QC_SOURCE_TOKEN: ${QC_SOURCE_TOKEN:?set QC_SOURCE_TOKEN}
+      QC_VIEWER_TOKEN: ${QC_VIEWER_TOKEN:?set QC_VIEWER_TOKEN}
+      QC_CONTROLLER_TOKEN: ${QC_CONTROLLER_TOKEN:?set QC_CONTROLLER_TOKEN}
+      QC_ADMIN_TOKEN: ${QC_ADMIN_TOKEN:?set QC_ADMIN_TOKEN}
+      QC_CHECKPOINT_SCAN_INTERVAL: "5"
+    volumes:
+      - qc_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health',timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
     restart: unless-stopped
 
   qc-emulator:
     build: .
-    container_name: zero-defect-emulator
-    ports:
-      - "8766:8766"
     command: ["python", "-m", "qc.emulator"]
+    ports:
+      - "127.0.0.1:8766:8766"
     environment:
-      - QC_BIND=0.0.0.0
-      - QC_PORT=8766
-      - QC_INTEGRATION_TOKEN=erp-integration-secret
-    restart: unless-stopped
+      QC_BIND: 0.0.0.0
+      QC_EMULATOR_PORT: "8766"
+      QC_INTEGRATION_TOKEN: ${QC_INTEGRATION_TOKEN:?set QC_INTEGRATION_TOKEN}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/health',timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  qc_data:

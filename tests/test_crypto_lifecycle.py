@@ -5,6 +5,8 @@ import unittest
 
 from qc.core import EventStore
 from qc.crypto import DEFAULT_PROFILE, HYBRID_PQ_PROFILE, KeyRing
+from cryptography.hazmat.primitives.asymmetric.mlkem import MLKEM768PrivateKey
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 
 class CryptoLifecycleTests(unittest.TestCase):
@@ -63,7 +65,9 @@ class CryptoLifecycleTests(unittest.TestCase):
         self.assertEqual(rows[1]["crypto_profile_id"], DEFAULT_PROFILE)
 
     def test_post_quantum_hybrid_kem_envelope(self):
-        # Ingest event using Post-Quantum Hybrid envelope profile
+        mlkem_seed = base64.b64encode(MLKEM768PrivateKey.generate().private_bytes_raw()).decode()
+        x25519_raw = base64.b64encode(X25519PrivateKey.generate().private_bytes_raw()).decode()
+        self.key_ring.add_hybrid_key_material("k1", mlkem_seed, x25519_raw)
         ev_pq = {
             "schema_version": 1,
             "source_id": "pq-sensor",
@@ -79,11 +83,26 @@ class CryptoLifecycleTests(unittest.TestCase):
         # Check DB metadata
         row = self.store.db.execute("SELECT * FROM raw_events WHERE event_id='pq-1'").fetchone()
         self.assertEqual(row["crypto_profile_id"], HYBRID_PQ_PROFILE)
+        self.assertEqual(row["nonce"], b"")
+        self.assertGreater(len(row["ciphertext"]), 1100)
 
         # Decrypt and verify contents
         decoded = self.store._decode(row)
         self.assertEqual(decoded["item_id"], "ITEM-PQ")
         self.assertEqual(decoded["payload"]["critical_aerospace_part"], True)
+        self.store.close()
+        reopened_ring = KeyRing.from_single_key(self.k1)
+        reopened_ring.add_hybrid_key_material("k1", mlkem_seed, x25519_raw)
+        self.store = EventStore(self.db_path, reopened_ring)
+        self.assertTrue(self.store.verify_integrity()["valid"])
+        self.assertEqual(self.store.history("ITEM-PQ")["events"][0]["event"], ev_pq)
+
+    def test_hybrid_profile_requires_independent_private_key(self):
+        event = {"schema_version": 1, "source_id": "pq-sensor", "event_id": "no-key",
+                 "item_id": "ITEM-PQ", "event_type": "ItemReceived",
+                 "occurred_at": "2026-09-25T11:00:00+03:00", "payload": {}}
+        with self.assertRaises(KeyError):
+            self.store.ingest(event, profile_id=HYBRID_PQ_PROFILE)
 
     def test_missing_key_fails_closed(self):
         # Ingest event under k1

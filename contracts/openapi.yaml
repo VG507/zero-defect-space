@@ -45,7 +45,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/IngestionEventV1'
+              oneOf:
+                - $ref: '#/components/schemas/IngestionEventV1'
+                - $ref: '#/components/schemas/IngestionEventV2'
       responses:
         '202':
           description: Accepted or duplicate event
@@ -93,41 +95,9 @@ components:
       scheme: bearer
   schemas:
     IngestionEventV1:
-      type: object
-      required:
-        - schema_version
-        - source_id
-        - event_id
-        - item_id
-        - event_type
-        - occurred_at
-        - payload
-      properties:
-        schema_version:
-          type: integer
-          example: 1
-        source_id:
-          type: string
-          example: demo-camera
-        event_id:
-          type: string
-          example: cam-101
-        item_id:
-          type: string
-          example: I-003
-        event_type:
-          type: string
-          example: InspectionReported
-        occurred_at:
-          type: string
-          format: date-time
-          example: "2026-09-25T10:11:00+03:00"
-        station_id:
-          type: string
-        operator_alias:
-          type: string
-        payload:
-          type: object
+      $ref: './event-v1.schema.json'
+    IngestionEventV2:
+      $ref: './event-v2.schema.json'
     ControllerDecisionRequest:
       type: object
       required:

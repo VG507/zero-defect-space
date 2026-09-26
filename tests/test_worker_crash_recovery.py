@@ -10,6 +10,8 @@ from __future__ import annotations
 import base64
 import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -61,6 +63,38 @@ class WorkerCrashRecoveryTests(unittest.TestCase):
             self.assertIsNone(partial, "Uncommitted transaction must not leave partial state in database")
         finally:
             store.close()
+
+    def test_actual_process_kill_rolls_back(self):
+        store = EventStore(self.db_path, self.key_b64)
+        event = {"schema_version": 1, "source_id": "sensor", "event_id": "survivor",
+                 "item_id": "ITEM-1", "event_type": "ItemReceived",
+                 "occurred_at": "2026-09-25T10:00:00+03:00", "payload": {}}
+        survivor = store.ingest(event)["ingestion_id"]
+        store.close()
+        worker_code = (
+            "import sys,time; from qc.core import EventStore; "
+            "s=EventStore(sys.argv[1],sys.argv[2]); "
+            "s.db.execute('BEGIN IMMEDIATE'); "
+            "s.db.execute('INSERT INTO cases(case_id,item_id,defect_type,area,first_ingestion_id) VALUES (?,?,?,?,?)',"
+            "('partial','ITEM-1','scratch','zone',sys.argv[3])); "
+            "print('READY',flush=True); time.sleep(60)"
+        )
+        proc = subprocess.Popen([sys.executable, "-c", worker_code, self.db_path, self.key_b64, survivor],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(proc.stdout.readline().strip(), "READY")
+        finally:
+            proc.kill()
+            proc.wait(timeout=5)
+            proc.stdout.close()
+            proc.stderr.close()
+        reopened = EventStore(self.db_path, self.key_b64)
+        try:
+            self.assertIsNone(reopened.db.execute("SELECT * FROM cases WHERE case_id='partial'").fetchone())
+            self.assertEqual(reopened.verify_integrity()["checked_events"], 1)
+            self.assertEqual(reopened.ingest(event)["state"], "duplicate")
+        finally:
+            reopened.close()
 
     def test_worker_restart_and_idempotent_replay(self):
         # 1. Worker 1 initializes and processes items

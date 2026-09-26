@@ -103,12 +103,14 @@ function renderCase(item) {
 }
 
 async function selectItem(itemId) {
+  const selection = state.selection = (state.selection || 0) + 1;
   state.selected = itemId;
   renderItems(state.items);
   $("detail-title").textContent = itemId;
   const panel = $("detail"); panel.replaceChildren(element("p", "empty", "Загружаем историю…"));
   try {
     const data = await api(`/api/items/${encodeURIComponent(itemId)}`);
+    if (selection !== state.selection) return;
     panel.replaceChildren();
     panel.append(element("h3", "section-label", "Хронология событий"));
     if (!data.events.length) panel.append(element("p", "empty", "Событий нет."));
@@ -144,7 +146,10 @@ async function selectItem(itemId) {
     panel.append(element("h3", "section-label", "Случаи и решения"));
     if (!data.cases.length) panel.append(element("p", "empty", "Признаков дефекта нет. Это не означает автоматического допуска изделия."));
     for (const item of data.cases) panel.append(renderCase(item));
-  } catch (error) { panel.replaceChildren(element("p", "empty", error.message)); notice(error.message); }
+  } catch (error) {
+    if (selection !== state.selection) return;
+    panel.replaceChildren(element("p", "empty", error.message)); notice(error.message);
+  }
 }
 
 async function refresh() {

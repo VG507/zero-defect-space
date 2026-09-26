@@ -41,6 +41,15 @@ def verify_generated_code_up_to_date() -> bool:
     return True
 
 
+def verify_openapi_schema_links() -> bool:
+    specification = (CONTRACTS_DIR / "openapi.yaml").read_text(encoding="utf-8")
+    required_links = ("$ref: './event-v1.schema.json'", "$ref: './event-v2.schema.json'")
+    if not all(link in specification for link in required_links):
+        print("[ERROR] OpenAPI must reference both versioned JSON Schemas", file=sys.stderr)
+        return False
+    return True
+
+
 def verify_backwards_compatibility() -> bool:
     """Ensure V2 schema does not remove or alter mandatory fields from V1 (breaking change check)."""
     v1 = json.loads((CONTRACTS_DIR / "event-v1.schema.json").read_text(encoding="utf-8"))
@@ -63,6 +72,29 @@ def verify_backwards_compatibility() -> bool:
         print(f"[ERROR] Breaking change detected: V2 removed event_types {removed_enums}!", file=sys.stderr)
         return False
 
+    if not v1_req.issubset(set(v2.get("required", []))):
+        return False
+    if set(v2.get("required", [])) - set(v1.get("required", [])):
+        print("[ERROR] V2 added required fields", file=sys.stderr)
+        return False
+    for name, old in v1["properties"].items():
+        new = v2["properties"].get(name)
+        if new is None or old.get("type") != new.get("type"):
+            print(f"[ERROR] V2 removed or changed field {name}", file=sys.stderr)
+            return False
+        if name == "schema_version":
+            if old.get("const") != 1 or new.get("const") != 2:
+                return False
+            continue
+        if "enum" in old and not set(old["enum"]).issubset(set(new.get("enum", []))):
+            print(f"[ERROR] V2 narrowed enum {name}", file=sys.stderr)
+            return False
+        if new.get("minLength", 0) > old.get("minLength", 0):
+            print(f"[ERROR] V2 tightened minLength {name}", file=sys.stderr)
+            return False
+        if "const" in new and new["const"] != old.get("const"):
+            print(f"[ERROR] V2 introduced const {name}", file=sys.stderr)
+            return False
     return True
 
 
@@ -70,8 +102,9 @@ def main() -> int:
     print("Verifying contract synchronization and backwards compatibility...")
     sync_ok = verify_generated_code_up_to_date()
     compat_ok = verify_backwards_compatibility()
+    links_ok = verify_openapi_schema_links()
 
-    if not sync_ok or not compat_ok:
+    if not sync_ok or not compat_ok or not links_ok:
         print("\nVerification FAILED.", file=sys.stderr)
         return 1
 

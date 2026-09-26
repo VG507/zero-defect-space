@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
 
 (async () => {
-  const browser = await chromium.launch({ headless: true, ...(process.env.QC_BROWSER_PATH ? { executablePath: process.env.QC_BROWSER_PATH } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--no-proxy-server'], ...(process.env.QC_BROWSER_PATH ? { executablePath: process.env.QC_BROWSER_PATH } : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
     const errors = [];
@@ -18,9 +18,13 @@ const { chromium } = require('playwright');
     assert.match(await page.locator('#line').innerText(), /Нет пригодного контроля в срок/);
     assert.match(await page.locator('#detail').innerText(), /weld_anomaly/);
     await page.getByRole('button', { name: /I-004: Нет пригодного контроля/ }).click();
+    await page.locator('#detail-title').getByText('I-004').waitFor();
+    await page.locator('#detail').getByText('Загружаем историю…').waitFor({ state: 'hidden' });
     assert.match(await page.locator('#detail').innerText(), /Контрольные точки|Ожидаемые контрольные точки/);
     assert.match(await page.locator('#detail').innerText(), /Нет пригодного контроля в срок/);
     await page.locator('#items').getByRole('button', { name: /I-003/ }).click();
+    await page.locator('#detail-title').getByText('I-003').waitFor();
+    await page.locator('#detail').getByText('Загружаем историю…').waitFor({ state: 'hidden' });
     assert.equal(await page.locator('#outbox .message').count(), 2);
     assert.equal(await page.locator('#outbox .state-acknowledged').count(), 2);
     if (process.env.QC_DEMO_CONTROLLER_TOKEN) {

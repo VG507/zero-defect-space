@@ -4,7 +4,7 @@ DO NOT EDIT MANUALLY. Run: python scripts/generate_contracts.py
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, Required, TypedDict
 
 EventType = Literal[
     "WorkOrderReceived",
@@ -41,29 +41,29 @@ class InspectionPayload(TypedDict, total=False):
 
 
 class IngestionEventV1(TypedDict, total=False):
-    schema_version: Literal[1]
-    source_id: str
-    event_id: str
-    item_id: str
-    event_type: EventType
-    occurred_at: str
-    station_id: str
-    operator_alias: str
-    payload: dict[str, Any]
+    schema_version: Required[Literal[1]]
+    source_id: Required[str]
+    event_id: Required[str]
+    item_id: Required[str]
+    event_type: Required[EventType]
+    occurred_at: Required[str]
+    station_id: NotRequired[str]
+    operator_alias: NotRequired[str]
+    payload: Required[dict[str, Any]]
 
 
 class IngestionEventV2(TypedDict, total=False):
-    schema_version: Literal[2]
-    source_id: str
-    event_id: str
-    item_id: str
-    event_type: EventType
-    occurred_at: str
-    station_id: str
-    operator_alias: str
-    source_firmware_version: str
-    device_telemetry: dict[str, Any]
-    payload: dict[str, Any]
+    schema_version: Required[Literal[2]]
+    source_id: Required[str]
+    event_id: Required[str]
+    item_id: Required[str]
+    event_type: Required[EventType]
+    occurred_at: Required[str]
+    station_id: NotRequired[str]
+    operator_alias: NotRequired[str]
+    source_firmware_version: NotRequired[str]
+    device_telemetry: NotRequired[dict[str, Any]]
+    payload: Required[dict[str, Any]]
 
 
 class ControllerDecisionRequest(TypedDict):
