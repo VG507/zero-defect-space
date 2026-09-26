@@ -31,6 +31,13 @@ const lineLabels = {
   no_confirmed_nonconformance: "Нет подтверждённого несоответствия"
 };
 
+const scenarioDescriptions = {
+  "I-001": "Штатные операции и пригодный итоговый контроль. Это не автоматический допуск изделия.",
+  "I-002": "Признак обнаружен на входе, до последующих операций. Денежный эффект не рассчитывался.",
+  "I-003": "Предупреждение станка и действие оператора рядом по времени с признаком. Причина не установлена автоматически.",
+  "I-004": "Непригодный результат не закрывает контрольную точку и не считается подтверждением годности."
+};
+
 function renderLine(items) {
   const board = $("line"); board.replaceChildren();
   if (!items.length) { board.append(element("p", "empty", "Изделий пока нет.")); return; }
@@ -105,6 +112,8 @@ function renderCase(item) {
 async function selectItem(itemId) {
   const selection = state.selection = (state.selection || 0) + 1;
   state.selected = itemId;
+  $("scenario-explanation").textContent = scenarioDescriptions[itemId] || "События из загруженного журнала.";
+  $("print-report").disabled = true;
   renderItems(state.items);
   $("detail-title").textContent = itemId;
   const panel = $("detail"); panel.replaceChildren(element("p", "empty", "Загружаем историю…"));
@@ -121,6 +130,14 @@ async function selectItem(itemId) {
       const payload = record.event.payload;
       if (payload.inspection_result) row.append(element("p", "", `Контроль: ${payload.inspection_result}; качество: ${payload.observation_quality || "unknown"}.`));
       if (payload.defects?.length) row.append(element("p", "", `Признаки: ${payload.defects.map(d => `${d.type} (${d.area || "не указана"})`).join(", ")}`));
+      const evidence = payload.evidence_image;
+      if (evidence && ["image/jpeg", "image/png"].includes(evidence.mime_type) && /^[A-Za-z0-9+/]+={0,2}$/.test(evidence.data_base64)) {
+        const figure = element("figure", "evidence");
+        const image = element("img"); image.alt = `Фото, переданное источником для события ${record.event.event_id}`;
+        image.src = `data:${evidence.mime_type};base64,${evidence.data_base64}`;
+        figure.append(image, element("figcaption", "", "Фото от источника события; автоматический анализ изображения не проводился."));
+        row.append(figure);
+      }
       if (record.reason) row.append(element("p", "", `Причина карантина: ${record.reason}`));
       panel.append(row);
     }
@@ -146,6 +163,7 @@ async function selectItem(itemId) {
     panel.append(element("h3", "section-label", "Случаи и решения"));
     if (!data.cases.length) panel.append(element("p", "empty", "Признаков дефекта нет. Это не означает автоматического допуска изделия."));
     for (const item of data.cases) panel.append(renderCase(item));
+    $("print-report").disabled = false;
   } catch (error) {
     if (selection !== state.selection) return;
     panel.replaceChildren(element("p", "empty", error.message)); notice(error.message);
@@ -157,6 +175,7 @@ async function refresh() {
   try {
     const [me, metrics, items, line, outbox] = await Promise.all([api("/api/me"), api("/api/metrics"), api("/api/items"), api("/api/line"), api("/api/outbox")]);
     state.role = me.role;
+    $("verify-integrity").hidden = me.role !== "admin";
     $("checked").textContent = metrics.checked_items;
     $("confirmed").textContent = metrics.items_with_confirmed_defect;
     $("pending").textContent = metrics.pending_cases;
@@ -173,6 +192,14 @@ async function refresh() {
       if (message.last_error) row.append(element("small", "", message.last_error));
       exchange.append(row);
     }
+    const system = $("system-status"); system.replaceChildren();
+    const facts = [
+      `Сервер ответил; роль: ${me.role}.`,
+      `Реестр: ${items.length} изделий; обзор линии: ${line.length} записей.`,
+      `Исходящий журнал: ${outbox.length} сообщений; подтверждено эмулятором: ${outbox.filter(m => m.state === "acknowledged").length}.`,
+      "Интеграции с реальными системами предприятия и промышленный CV здесь не проверены."
+    ];
+    for (const fact of facts) system.append(element("p", "", fact));
     if (state.selected) await selectItem(state.selected);
     else if (items.length) await selectItem(items[0].item_id);
     notice("");
@@ -181,3 +208,20 @@ async function refresh() {
 
 $("access-form").addEventListener("submit", ev => { ev.preventDefault(); state.token = $("token").value.trim(); refresh(); });
 $("refresh").addEventListener("click", refresh);
+$("demo-actions").addEventListener("click", event => {
+  const itemId = event.target.closest("button[data-item]")?.dataset.item;
+  if (!itemId) return;
+  if (!state.token) { notice("Сначала откройте данные токеном роли."); return; }
+  if (!state.items.some(item => item.item_id === itemId)) { notice("Сценарий отсутствует в текущем наборе."); return; }
+  selectItem(itemId);
+  $("detail-title").scrollIntoView({ behavior: "smooth", block: "start" });
+});
+$("print-report").addEventListener("click", () => window.print());
+$("verify-integrity").addEventListener("click", async () => {
+  try {
+    const result = await api("/api/integrity");
+    $("integrity-result").textContent = result.valid
+      ? `Проверено событий: ${result.checked_events}; целостность подтверждена локальной проверкой.`
+      : "Нарушена целостность журнала. Эксплуатация требует расследования.";
+  } catch (error) { $("integrity-result").textContent = `Проверка не выполнена: ${error.message}`; }
+});

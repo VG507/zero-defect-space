@@ -404,6 +404,22 @@ class EventStore:
                                              or not payload["previous_run_id"].strip()):
                 raise ValueError("rework requires previous_run_id")
         if kind in INSPECTION_TYPES:
+            evidence = payload.get("evidence_image")
+            if evidence is not None:
+                if not isinstance(evidence, dict) or set(evidence) != {"mime_type", "data_base64"}:
+                    raise ValueError("evidence_image must contain mime_type and data_base64")
+                mime = evidence["mime_type"]
+                encoded = evidence["data_base64"]
+                if mime not in ("image/jpeg", "image/png") or not isinstance(encoded, str) or len(encoded) > 350000:
+                    raise ValueError("unsupported or oversized evidence image")
+                try:
+                    image = base64.b64decode(encoded, validate=True)
+                except (ValueError, base64.binascii.Error) as exc:
+                    raise ValueError("invalid evidence image encoding") from exc
+                if not 0 < len(image) <= 256 * 1024 or not image.startswith(
+                    b"\xff\xd8\xff" if mime == "image/jpeg" else b"\x89PNG\r\n\x1a\n"
+                ):
+                    raise ValueError("invalid evidence image content")
             if payload.get("inspection_result") not in RESULTS:
                 raise ValueError("invalid inspection_result")
             if payload.get("observation_quality", "unknown") not in QUALITIES:

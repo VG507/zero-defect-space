@@ -15,3 +15,30 @@
 .checkpoint small { color: var(--muted); overflow-wrap: anywhere; }
 @media (max-width: 1000px) { .line-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 560px) { .line-list { grid-template-columns: 1fr; } .line-row { min-height: 88px; } }
+.demo-pane { min-height: 0; margin: 0 0 1.5rem; }
+.demo-pane .pane-heading p { color: var(--muted); margin: .35rem 0 0; }
+.demo-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .6rem; padding: 1rem 1.3rem .3rem; }
+.demo-actions button { text-align: left; background: #e4f0ee; color: var(--ink); border-color: var(--line); font-weight: 650; }
+.demo-actions button:hover { background: var(--teal); color: white; }
+.demo-explanation { margin: .5rem 1.3rem 1.2rem; color: var(--muted); }
+.report-disclaimer { margin: 1rem 1.3rem 0; color: var(--muted); font-size: .85rem; }
+#print-report:disabled { opacity: .45; cursor: not-allowed; }
+.evidence { margin: .7rem 0; }
+.evidence img { max-width: min(100%, 420px); max-height: 250px; object-fit: contain; border: 1px solid var(--line); }
+.evidence figcaption { font-size: .78rem; color: var(--muted); }
+.system-pane { min-height: 0; margin-top: 1.5rem; }
+.system-status { padding: .4rem 1.3rem; }
+.system-status p { margin: .6rem 0; }
+#integrity-result { margin: 0 1.3rem 1.2rem; font-weight: 650; }
+@media (max-width: 900px) { .demo-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .demo-actions { grid-template-columns: 1fr; } }
+@media print {
+  body, main { background: white; color: black; }
+  .topbar, .intro, #notice, .demo-pane, .metrics, .line-pane, .item-pane, .integration-pane, .system-pane, footer, #print-report, .decision-form { display: none !important; }
+  main { max-width: none; padding: 0; }
+  .workspace { display: block; }
+  .detail-pane { border: 0; min-height: 0; }
+  .detail-pane .pane-heading { padding: 0 0 .5rem; }
+  .detail { padding: 0; }
+  .event, .checkpoint, .case { break-inside: avoid; }
+}

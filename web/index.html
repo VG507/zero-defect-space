@@ -24,6 +24,16 @@
       </form>
     </section>
     <p id="notice" role="status" aria-live="polite"></p>
+    <section class="pane demo-pane" aria-labelledby="demo-title">
+      <div class="pane-heading"><div><h2 id="demo-title">Пульт сценариев</h2><p>Переходы по уже загруженным синтетическим событиям; кнопки не меняют журнал.</p></div></div>
+      <div class="demo-actions" id="demo-actions">
+        <button type="button" data-item="I-001">Штатный маршрут · I-001</button>
+        <button type="button" data-item="I-002">Входной дефект · I-002</button>
+        <button type="button" data-item="I-003">Сигнал после операции · I-003</button>
+        <button type="button" data-item="I-004">Нет пригодного контроля · I-004</button>
+      </div>
+      <p id="scenario-explanation" class="demo-explanation">Выберите сценарий, чтобы открыть его историю.</p>
+    </section>
     <section class="metrics" aria-label="Показатели">
       <article><span>Проверено изделий</span><strong id="checked">—</strong><small>Результат пригоден для оценки</small></article>
       <article><span>С подтверждённым несоответствием</span><strong id="confirmed">—</strong><small>Уникальные изделия</small></article>
@@ -33,9 +43,10 @@
     <section class="pane line-pane" aria-labelledby="line-title"><div class="pane-heading"><div><p class="kicker">МАРШРУТ КОНТРОЛЯ</p><h2 id="line-title">Состояние изделий</h2></div></div><div id="line" class="line-list"><p class="empty">Данные появятся после входа.</p></div></section>
     <div class="workspace">
       <section class="pane item-pane" aria-labelledby="items-title"><div class="pane-heading"><div><p class="kicker">РЕЕСТР</p><h2 id="items-title">Изделия</h2></div><span id="item-count">0</span></div><div id="items" class="item-list"><p class="empty">Введите токен роли, чтобы открыть реестр.</p></div></section>
-      <section class="pane detail-pane" aria-labelledby="detail-title"><div class="pane-heading"><div><p class="kicker">ТРАССИРОВКА</p><h2 id="detail-title">Выберите изделие</h2></div></div><div id="detail" class="detail"><p class="empty">Хронология и решения появятся после выбора изделия.</p></div></section>
+      <section class="pane detail-pane" aria-labelledby="detail-title"><div class="pane-heading"><div><p class="kicker">ТРАССИРОВКА</p><h2 id="detail-title">Выберите изделие</h2></div><button id="print-report" type="button" disabled>Печатный отчёт</button></div><p class="report-disclaimer">Демонстрационный отчёт прослеживаемости. Не официальный формуляр и не допуск изделия.</p><div id="detail" class="detail"><p class="empty">Хронология и решения появятся после выбора изделия.</p></div></section>
     </div>
     <section class="pane integration-pane" aria-labelledby="integration-title"><div class="pane-heading"><div><p class="kicker">ОБМЕН</p><h2 id="integration-title">Исходящие результаты</h2></div></div><div id="outbox" class="integration-content"><p class="empty">После решения контролёра здесь появится сообщение для внешней системы.</p></div></section>
+    <section class="pane system-pane" aria-labelledby="system-title"><div class="pane-heading"><div><h2 id="system-title">Что проверено в этом запуске</h2></div><button id="verify-integrity" type="button" hidden>Проверить журнал</button></div><div id="system-status" class="system-status"><p class="empty">Откройте данные, чтобы увидеть состояние контура.</p></div><p id="integrity-result" role="status" aria-live="polite"></p></section>
   </main>
   <footer>Демо на синтетических событиях. Не является системой допуска деталей к производству.</footer>
 </body>

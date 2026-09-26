@@ -86,6 +86,22 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(self.request("/api/integrity", "admin")[1]["checked_events"], 2)
 
+    def test_source_photo_evidence_is_bounded_and_preserved(self):
+        png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR7sAAAAASUVORK5CYII="
+        event = {"schema_version": 1, "source_id": "camera", "event_id": "photo-1",
+                 "item_id": "PHOTO-1", "event_type": "InspectionReported",
+                 "occurred_at": "2026-09-25T10:00:00+03:00",
+                 "payload": {"inspection_result": "unable_to_assess", "observation_quality": "poor",
+                             "defects": [], "evidence_image": {"mime_type": "image/png", "data_base64": png}}}
+        self.assertEqual(self.request("/api/events", "source", event)[1]["state"], "applied")
+        history = self.request("/api/items/PHOTO-1", "view")[1]
+        self.assertEqual(history["events"][0]["event"]["payload"]["evidence_image"]["data_base64"], png)
+        self.assertEqual(self.request("/api/integrity", "admin")[1]["checked_events"], 1)
+        invalid = {**event, "event_id": "photo-2", "payload": {**event["payload"],
+                   "evidence_image": {"mime_type": "image/svg+xml", "data_base64": png}}}
+        self.assertEqual(self.request("/api/events", "source", invalid)[1]["state"], "quarantined")
+        self.assertEqual(self.request("/api/integrity", "admin")[1]["checked_events"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

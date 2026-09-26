@@ -10,6 +10,18 @@ const { chromium } = require('playwright');
     await page.goto(process.env.QC_BASE_URL || 'http://127.0.0.1:8765', { waitUntil: 'networkidle' });
     await page.locator('#token').fill(process.env.QC_DEMO_VIEWER_TOKEN);
     await page.getByRole('button', { name: 'Открыть данные' }).click();
+    await page.getByRole('button', { name: /Входной дефект · I-002/ }).click();
+    await page.locator('#detail-title').getByText('I-002').waitFor();
+    assert.match(await page.locator('#scenario-explanation').innerText(), /до последующих операций/);
+    await page.getByRole('button', { name: /Сигнал после операции · I-003/ }).click();
+    await page.locator('#detail-title').getByText('I-003').waitFor();
+    await page.locator('#detail').getByText('Загружаем историю…').waitFor({ state: 'hidden' });
+    assert.equal(await page.locator('#print-report').isEnabled(), true);
+    assert.match(await page.locator('#system-status').innerText(), /эмулятором/);
+    await page.emulateMedia({ media: 'print' });
+    assert.equal(await page.locator('.detail-pane').isVisible(), true);
+    assert.equal(await page.locator('.topbar').isVisible(), false);
+    await page.emulateMedia({ media: 'screen' });
     await page.locator('#items').getByRole('button', { name: /I-003/ }).click();
     await page.locator('#detail-title').getByText('I-003').waitFor();
     assert.equal(await page.locator('#checked').innerText(), '3');
@@ -36,6 +48,24 @@ const { chromium } = require('playwright');
       await page.getByRole('button', { name: 'Сохранить решение' }).click();
       await page.waitForFunction(() => document.getElementById('confirmed').textContent === '1');
       assert.equal(await page.locator('#outbox .message').count(), 3);
+    }
+    if (process.env.QC_DEMO_ADMIN_TOKEN) {
+      await page.locator('#token').fill(process.env.QC_DEMO_ADMIN_TOKEN);
+      await page.getByRole('button', { name: 'Открыть данные' }).click();
+      await page.getByRole('button', { name: 'Проверить журнал' }).click();
+      await page.getByText(/целостность подтверждена локальной проверкой/).waitFor();
+      const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR7sAAAAASUVORK5CYII=';
+      const response = await page.evaluate(async data => fetch('/api/events', {
+        method: 'POST', headers: { Authorization: `Bearer ${data.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schema_version: 1, source_id: 'browser-test', event_id: 'photo-smoke',
+          item_id: 'PHOTO-SMOKE', event_type: 'InspectionReported', occurred_at: '2026-09-25T10:00:00+03:00',
+          payload: { inspection_result: 'unable_to_assess', observation_quality: 'poor', defects: [],
+            evidence_image: { mime_type: 'image/png', data_base64: data.image } } })
+      }).then(r => r.json()), { token: process.env.QC_DEMO_ADMIN_TOKEN, image });
+      assert.equal(response.state, 'applied');
+      await page.getByRole('button', { name: 'Обновить данные' }).click();
+      await page.locator('#items').getByRole('button', { name: /PHOTO-SMOKE/ }).click();
+      await page.locator('#detail img[alt*="photo-smoke"]').waitFor();
     }
     await page.setViewportSize({ width: 375, height: 812 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
