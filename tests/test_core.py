@@ -23,6 +23,84 @@ class CoreTests(unittest.TestCase):
         self.store.close()
         self.temp.cleanup()
 
+    def test_same_defect_on_different_components_stays_separate(self):
+        observation = event("ASSEMBLY-1", 1, "InspectionReported", "signs_detected",
+                            defects=[{"type": "scratch", "area": "outer", "component_id": "C-1"},
+                                     {"type": "scratch", "area": "outer", "component_id": "C-2"}])
+        self.assertEqual(self.store.ingest(observation)["state"], "applied")
+        cases = self.store.cases()
+        self.assertEqual({case["component_id"] for case in cases}, {"C-1", "C-2"})
+        self.store.decide(cases[0]["case_id"], "confirmed", "controller", "observed", 1, "decision-1")
+        self.assertEqual(self.store.metrics()["confirmed_defects_by_type"], {"scratch": 1})
+        self.assertTrue(self.store.verify_integrity()["decisions_and_outbox_verified"])
+
+    def test_decision_and_delivery_tamper_is_detected(self):
+        observation = event("I-1", 1, "InspectionReported", "signs_detected",
+                            defects=[{"type": "scratch", "area": "outer"}])
+        self.store.ingest(observation)
+        case = self.store.cases()[0]
+        self.store.decide(case["case_id"], "confirmed", "controller", "observed", 1, "decision-1")
+        self.store.db.execute("UPDATE decisions SET reason='forged'")
+        with self.assertRaisesRegex(ValueError, "anchor mismatch"):
+            self.store.verify_integrity()
+        self.store.db.execute("UPDATE decisions SET reason='observed'")
+        message_id = self.store.outbox()[0]["message_id"]
+        self.store.record_delivery(message_id, True)
+        self.store.db.execute("DELETE FROM outbox")
+        with self.assertRaisesRegex(ValueError, "anchor mismatch"):
+            self.store.verify_integrity()
+
+    def test_analytics_uses_explicit_cause_and_source_shift(self):
+        started = event("I-1", 1, "OperationStarted", time="2026-09-25T10:00:00+03:00")
+        started.update(schema_version=2, station_id="ST-1", operator_alias="worker-1",
+                       line_id="L-1", shift_id="SHIFT-A")
+        started["payload"] = {"operation_run_id": "RUN-1", "operation": "milling"}
+        finished = event("I-1", 2, "OperationFinished", time="2026-09-25T10:10:00+03:00")
+        finished.update(schema_version=2, station_id="ST-1", line_id="L-1", shift_id="SHIFT-A")
+        finished["payload"] = {"operation_run_id": "RUN-1"}
+        inspection = event("I-1", 3, "InspectionReported", "signs_detected",
+                           defects=[{"type": "scratch", "area": "outer"}],
+                           time="2026-09-25T10:11:00+03:00")
+        inspection.update(schema_version=2, station_id="ST-1", line_id="L-1", shift_id="SHIFT-A")
+        for value in (started, finished, inspection):
+            self.assertEqual(self.store.ingest(value)["state"], "applied")
+        case = self.store.cases()[0]
+        self.store.decide(case["case_id"], "confirmed", "controller", "expert review", 1, "decision-1",
+                          cause_status="operator", comparable_work_key="milling-v1", error_confirmed=True)
+        metrics = self.store.metrics()
+        self.assertEqual(metrics["confirmed_defects_by_type"], {"scratch": 1})
+        self.assertEqual(metrics["confirmed_defects_by_line"], {"L-1": 1})
+        self.assertEqual(metrics["confirmed_defects_by_station"], {"ST-1": 1})
+        self.assertEqual(metrics["confirmed_cases_by_cause"], {"operator": 1})
+        self.assertEqual(metrics["confirmed_errors_by_comparable_work"], {"milling-v1": 1})
+        self.assertEqual(metrics["operation_durations"][0]["shift_id"], "SHIFT-A")
+        self.assertEqual(metrics["operation_durations"][0]["active_seconds"], 600)
+
+    def test_legacy_case_schema_migrates_with_component_and_decision(self):
+        observation = event("ASSEMBLY-1", 1, "InspectionReported", "signs_detected",
+                            defects=[{"type": "scratch", "area": "outer", "component_id": "C-1"}])
+        self.store.ingest(observation)
+        case = self.store.cases()[0]
+        self.store.decide(case["case_id"], "confirmed", "controller", "observed", 1, "decision-1")
+        path = self.store.db.execute("PRAGMA database_list").fetchone()[2]
+        key = base64.b64encode(self.store.key_ring.keys["k1"]).decode()
+        self.store.db.execute("PRAGMA foreign_keys=OFF")
+        self.store.db.executescript("""
+            CREATE TABLE cases_old (case_id TEXT PRIMARY KEY, item_id TEXT NOT NULL,
+              defect_type TEXT NOT NULL, area TEXT NOT NULL,
+              first_ingestion_id TEXT NOT NULL REFERENCES raw_events(ingestion_id),
+              version INTEGER NOT NULL DEFAULT 1, review_required INTEGER NOT NULL DEFAULT 0,
+              UNIQUE(item_id,defect_type,area));
+            INSERT INTO cases_old SELECT case_id,item_id,defect_type,area,first_ingestion_id,version,review_required FROM cases;
+            DROP TABLE cases;
+            ALTER TABLE cases_old RENAME TO cases;
+        """)
+        self.store.close()
+        self.store = EventStore(path, key)
+        self.assertEqual(self.store.cases()[0]["component_id"], "C-1")
+        self.assertEqual(self.store.cases()[0]["status"], "confirmed")
+        self.assertTrue(self.store.verify_integrity()["valid"])
+
     def test_dedup_conflict_and_quarantine(self):
         value = event("I-1", 1, "InspectionReported", "no_signs_detected")
         first = self.store.ingest(value)

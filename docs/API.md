@@ -14,10 +14,10 @@
 | `GET /api/checkpoints` | viewer/controller/admin | Ожидаемые точки, наблюдения и журнал оповещений |
 | `POST /api/checkpoints/scan` | admin | Явно проверить сроки; тело `{}` или `{"as_of":"..."}` |
 | `GET /api/cases` | viewer/controller/admin | Случаи и история решений |
-| `POST /api/cases/{case_id}/decisions` | controller/admin | Добавить решение; `expected_version` и `idempotency_key` обязательны |
-| `GET /api/metrics` | viewer/controller/admin | Основные счётчики, версия правил |
+| `POST /api/cases/{case_id}/decisions` | controller/admin | Добавить решение; `expected_version` и `idempotency_key` обязательны. Дополнительно: `cause_status` (`unknown`, `incoming`, `equipment`, `operator`, `process`, `other`), `comparable_work_key`, `error_confirmed`. Подтверждение ошибки требует решения `confirmed`, причины `operator` и ключа сопоставимой работы. |
+| `GET /api/metrics` | viewer/controller/admin | Счётчики, подтверждённые дефекты по типу/линии/посту, распределение причин, интервалы по изделию/посту/оператору/смене и подтверждённые ошибки по сопоставимым работам. Линия и смена доступны при передаче в событии v2. |
 | `GET /api/outbox` | viewer/controller/admin | Состояние исходящих результатов |
-| `GET /api/integrity` | admin | Расшифровать и проверить исходные записи, хэш-цепочку и локальный HMAC-якорь. Успешный ответ содержит `checked_events`, `valid`, `event_digests_verified`, `hash_chain_verified`, `anchor_verified`; при ошибке проверка не подтверждена. Решения и ACK этой проверкой не охвачены. |
+| `GET /api/integrity` | admin | Расшифровать исходные записи, проверить хэш-цепочку и локальный HMAC-якорь, а также снимок решений и outbox, включая ACK. Успешный ответ содержит `decisions_and_outbox_verified`. Решения и ACK не входят в отдельную append-only цепочку; старые записи фиксируются как миграционная исходная точка без доказательства их прежней целостности. |
 
 Минимальный конверт входа:
 

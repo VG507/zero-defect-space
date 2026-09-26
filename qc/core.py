@@ -190,6 +190,12 @@ class EventStore:
             if self.db.execute("SELECT COUNT(*) FROM raw_events").fetchone()[0]:
                 raise ValueError("audit anchor missing for nonempty database; explicit migration required")
             self._write_anchor()
+        elif "critical_digest" not in self._read_anchor():
+            # Existing decisions/outbox become a baseline; their earlier history is not attested.
+            if not hmac.compare_digest(canonical(self._read_anchor()),
+                                       canonical(self._anchor_state(include_critical=False))):
+                raise ValueError("legacy audit anchor mismatch")
+            self._write_anchor()
 
     def _schema(self) -> None:
         self.db.executescript("""
@@ -232,10 +238,11 @@ class EventStore:
                 item_id TEXT NOT NULL,
                 defect_type TEXT NOT NULL,
                 area TEXT NOT NULL,
+                component_id TEXT NOT NULL DEFAULT '',
                 first_ingestion_id TEXT NOT NULL REFERENCES raw_events(ingestion_id),
                 version INTEGER NOT NULL DEFAULT 1,
                 review_required INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(item_id, defect_type, area)
+                UNIQUE(item_id, defect_type, area, component_id)
             );
             CREATE TABLE IF NOT EXISTS decisions (
                 decision_id TEXT PRIMARY KEY,
@@ -245,6 +252,9 @@ class EventStore:
                 reason TEXT NOT NULL,
                 at TEXT NOT NULL,
                 idempotency_key TEXT NOT NULL,
+                cause_status TEXT NOT NULL DEFAULT 'unknown',
+                comparable_work_key TEXT,
+                error_confirmed INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(case_id, idempotency_key)
             );
             CREATE TABLE IF NOT EXISTS outbox (
@@ -269,6 +279,48 @@ class EventStore:
         """)
         if "hash_version" not in {row[1] for row in self.db.execute("PRAGMA table_info(raw_events)")}:
             self.db.execute("ALTER TABLE raw_events ADD COLUMN hash_version INTEGER NOT NULL DEFAULT 1")
+        decision_columns = {row[1] for row in self.db.execute("PRAGMA table_info(decisions)")}
+        if "cause_status" not in decision_columns:
+            if self.anchor_path is not None and self.anchor_path.exists():
+                existing = self._read_anchor()
+                expected = self._anchor_state(include_critical="critical_digest" in existing)
+                if not hmac.compare_digest(canonical(existing), canonical(expected)):
+                    raise ValueError("audit anchor mismatch before decision migration")
+            self.db.execute("ALTER TABLE decisions ADD COLUMN cause_status TEXT NOT NULL DEFAULT 'unknown'")
+            self.db.execute("ALTER TABLE decisions ADD COLUMN comparable_work_key TEXT")
+            self.db.execute("ALTER TABLE decisions ADD COLUMN error_confirmed INTEGER NOT NULL DEFAULT 0")
+            if self.anchor_path is not None and self.anchor_path.exists() and "critical_digest" in existing:
+                self._write_anchor()
+        if "component_id" not in {row[1] for row in self.db.execute("PRAGMA table_info(cases)")}:
+            legacy = self.db.execute("SELECT * FROM cases").fetchall()
+            self.db.execute("PRAGMA foreign_keys=OFF")
+            try:
+                self.db.execute("BEGIN IMMEDIATE")
+                self.db.execute("CREATE TABLE cases_new (case_id TEXT PRIMARY KEY, item_id TEXT NOT NULL, "
+                                "defect_type TEXT NOT NULL, area TEXT NOT NULL, component_id TEXT NOT NULL DEFAULT '', "
+                                "first_ingestion_id TEXT NOT NULL REFERENCES raw_events(ingestion_id), "
+                                "version INTEGER NOT NULL DEFAULT 1, review_required INTEGER NOT NULL DEFAULT 0, "
+                                "UNIQUE(item_id,defect_type,area,component_id))")
+                for row in legacy:
+                    raw = self.db.execute("SELECT * FROM raw_events WHERE ingestion_id=?", (row["first_ingestion_id"],)).fetchone()
+                    event = self._decode(raw)
+                    component_id = next((d.get("component_id") or event["payload"].get("component_id") or ""
+                                         for d in event["payload"].get("defects", [])
+                                         if d["type"] == row["defect_type"] and
+                                         (d.get("area") or "unspecified") == row["area"]), "")
+                    self.db.execute("INSERT INTO cases_new VALUES (?,?,?,?,?,?,?,?)",
+                                    (row["case_id"], row["item_id"], row["defect_type"], row["area"],
+                                     component_id, row["first_ingestion_id"], row["version"], row["review_required"]))
+                self.db.execute("DROP TABLE cases")
+                self.db.execute("ALTER TABLE cases_new RENAME TO cases")
+                self.db.execute("COMMIT")
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+            finally:
+                self.db.execute("PRAGMA foreign_keys=ON")
+            if self.db.execute("PRAGMA foreign_key_check").fetchone():
+                raise ValueError("case migration left invalid foreign keys")
 
     @staticmethod
     def _row_hash(row: dict[str, Any]) -> str:
@@ -280,10 +332,14 @@ class EventStore:
         fields["ciphertext"] = base64.b64encode(row["ciphertext"]).decode("ascii")
         return hashlib.sha256(canonical(fields)).hexdigest()
 
-    def _anchor_state(self) -> dict[str, Any]:
+    def _anchor_state(self, include_critical: bool = True) -> dict[str, Any]:
         row = self.db.execute("SELECT block_hash FROM raw_events ORDER BY rowid DESC LIMIT 1").fetchone()
         count = self.db.execute("SELECT COUNT(*) FROM raw_events").fetchone()[0]
         state = {"count": count, "head": row["block_hash"] if row else "GENESIS", "key_id": "k1"}
+        if include_critical:
+            decisions = [dict(r) for r in self.db.execute("SELECT * FROM decisions ORDER BY rowid")]
+            outbox = [dict(r) for r in self.db.execute("SELECT * FROM outbox ORDER BY rowid")]
+            state["critical_digest"] = hashlib.sha256(canonical({"decisions": decisions, "outbox": outbox})).hexdigest()
         key = self.key_ring.keys[state["key_id"]]
         state["mac"] = hmac.new(key, canonical(state), hashlib.sha256).hexdigest()
         return state
@@ -558,14 +614,15 @@ class EventStore:
                 if payload["inspection_result"] == "signs_detected" and payload.get("observation_quality", "unknown") == "good":
                     for defect in payload["defects"]:
                         area = defect.get("area") or "unspecified"
+                        component_id = defect.get("component_id") or payload.get("component_id") or ""
                         existing = self.db.execute(
-                            "SELECT case_id FROM cases WHERE item_id=? AND defect_type=? AND area=?",
-                            (event["item_id"], defect["type"], area),
+                            "SELECT case_id FROM cases WHERE item_id=? AND defect_type=? AND area=? AND component_id=?",
+                            (event["item_id"], defect["type"], area, component_id),
                         ).fetchone()
                         if not existing:
                             self.db.execute(
-                                "INSERT INTO cases(case_id,item_id,defect_type,area,first_ingestion_id) VALUES (?,?,?,?,?)",
-                                (str(uuid.uuid4()), event["item_id"], defect["type"], area, ingestion_id),
+                                "INSERT INTO cases(case_id,item_id,defect_type,area,component_id,first_ingestion_id) VALUES (?,?,?,?,?,?)",
+                                (str(uuid.uuid4()), event["item_id"], defect["type"], area, component_id, ingestion_id),
                             )
             if state == "applied":
                 self.db.execute(
@@ -671,12 +728,10 @@ class EventStore:
         evidence_events = [(r, self._decode(r)) for r in evidence_rows]
         matching = [(r, e) for r, e in evidence_events if e["event_type"] in INSPECTION_TYPES
                     and any(d["type"] == row["defect_type"] and (d.get("area") or "unspecified") == row["area"]
+                            and (d.get("component_id") or e["payload"].get("component_id") or "") == row["component_id"]
                             for d in e["payload"].get("defects", []))]
         detection_row, detection = matching[0]
-        component_id = next((d.get("component_id") for d in detection["payload"].get("defects", [])
-                             if d["type"] == row["defect_type"] and
-                             (d.get("area") or "unspecified") == row["area"]),
-                            detection["payload"].get("component_id"))
+        component_id = row["component_id"] or None
         operation_run_id = detection["payload"].get("operation_run_id")
         before = [(r, e) for r, e in evidence_events if r["occurred_at"] < detection_row["occurred_at"]
                   and e["event_type"] in INSPECTION_TYPES
@@ -706,11 +761,12 @@ class EventStore:
             "operation_run_id": operation_run_id,
         }
         return {"case_id": row["case_id"], "item_id": row["item_id"],
-                "defect_type": row["defect_type"], "area": row["area"],
+                "defect_type": row["defect_type"], "area": row["area"], "component_id": component_id,
                 "first_ingestion_id": row["first_ingestion_id"], "version": row["version"],
                 "review_required": bool(row["review_required"]),
                 "status": decisions[-1]["action"] if decisions else "awaiting_review",
-                "cause_status": "unknown", "context": context, "decisions": decisions}
+                "cause_status": decisions[-1]["cause_status"] if decisions else "unknown",
+                "context": context, "decisions": decisions}
 
     def cases(self) -> list[dict[str, Any]]:
         with self.lock:
@@ -755,11 +811,19 @@ class EventStore:
             return result
 
     def decide(self, case_id: str, action: str, actor: str, reason: str,
-               expected_version: int, idempotency_key: str) -> dict[str, Any]:
+               expected_version: int, idempotency_key: str, cause_status: str = "unknown",
+               comparable_work_key: str | None = None, error_confirmed: bool = False) -> dict[str, Any]:
         if action not in DECISIONS:
             raise ValueError("invalid decision")
         if not actor.strip() or not reason.strip() or not idempotency_key.strip():
             raise ValueError("actor, reason and idempotency_key are required")
+        if cause_status not in {"unknown", "incoming", "equipment", "operator", "process", "other"}:
+            raise ValueError("invalid cause_status")
+        if type(error_confirmed) is not bool or (error_confirmed and
+                (action != "confirmed" or cause_status != "operator" or not comparable_work_key)):
+            raise ValueError("confirmed operator error requires confirmed decision, operator cause and comparable work")
+        if comparable_work_key is not None and (not isinstance(comparable_work_key, str) or not comparable_work_key.strip()):
+            raise ValueError("invalid comparable_work_key")
         with self.transaction():
             row = self.db.execute("SELECT * FROM cases WHERE case_id=?", (case_id,)).fetchone()
             if not row:
@@ -767,15 +831,18 @@ class EventStore:
             old = self.db.execute("SELECT * FROM decisions WHERE case_id=? AND idempotency_key=?",
                                   (case_id, idempotency_key)).fetchone()
             if old:
-                if old["action"] != action or old["actor"] != actor or old["reason"] != reason:
+                if (old["action"] != action or old["actor"] != actor or old["reason"] != reason or
+                        old["cause_status"] != cause_status or old["comparable_work_key"] != comparable_work_key or
+                        bool(old["error_confirmed"]) != error_confirmed):
                     raise ValueError("decision idempotency conflict")
                 return self._case(row)
             if row["version"] != expected_version:
                 raise ValueError("stale case version")
             decision_id = str(uuid.uuid4())
             at = utc_now()
-            self.db.execute("INSERT INTO decisions VALUES (?,?,?,?,?,?,?)",
-                            (decision_id, case_id, action, actor, reason, at, idempotency_key))
+            self.db.execute("INSERT INTO decisions VALUES (?,?,?,?,?,?,?,?,?,?)",
+                            (decision_id, case_id, action, actor, reason, at, idempotency_key,
+                             cause_status, comparable_work_key, int(error_confirmed)))
             self.db.execute("UPDATE cases SET version=version+1,review_required=0 WHERE case_id=?", (case_id,))
             payload = {"message_id": str(uuid.uuid4()), "schema_version": 1,
                        "item_id": row["item_id"], "case_id": case_id,
@@ -797,7 +864,7 @@ class EventStore:
             rows = self.db.execute("SELECT r.* FROM raw_events r JOIN processing_events p "
                                    "ON p.ingestion_id=r.ingestion_id WHERE p.state='applied'").fetchall()
             checked, unable = set(), set()
-            defect_evidence: dict[tuple[str, str, str], list[tuple[str, str]]] = {}
+            defect_evidence: dict[tuple[str, str, str, str], list[tuple[str, dict[str, Any]]]] = {}
             for row in rows:
                 event = self._decode(row)
                 if event["event_type"] not in INSPECTION_TYPES:
@@ -811,14 +878,36 @@ class EventStore:
                 if quality != "good":
                     continue
                 for defect in event["payload"].get("defects", []):
-                    key = (event["item_id"], defect["type"], defect.get("area") or "unspecified")
-                    defect_evidence.setdefault(key, []).append((row["occurred_at"], event["event_type"]))
+                    key = (event["item_id"], defect["type"], defect.get("area") or "unspecified",
+                           defect.get("component_id") or event["payload"].get("component_id") or "")
+                    defect_evidence.setdefault(key, []).append((row["occurred_at"], event))
             confirmed = [c for c in self.cases() if c["status"] == "confirmed"]
+            def evidence(case):
+                key = (case["item_id"], case["defect_type"], case["area"], case["component_id"] or "")
+                return min(defect_evidence[key], key=lambda pair: pair[0])[1]
             incoming = sum(
-                min(defect_evidence[(case["item_id"], case["defect_type"], case["area"])])[1]
-                == "IncomingInspectionCompleted" for case in confirmed
+                evidence(case)["event_type"] == "IncomingInspectionCompleted" for case in confirmed
             )
             runs = [run for item in self.items() for run in self.history(item["item_id"])["operation_runs"]]
+            def counts(values):
+                result = {}
+                for value in values:
+                    label = value or "не указано"
+                    result[label] = result.get(label, 0) + 1
+                return result
+            durations = []
+            for item in self.items():
+                history = self.history(item["item_id"])
+                starts = {r["event"]["payload"]["operation_run_id"]: r["event"]
+                          for r in history["events"] if r["state"] == "applied" and
+                          r["event"]["event_type"] in {"OperationStarted", "ReworkStarted"}}
+                for run in history["operation_runs"]:
+                    if run["active_seconds"] is not None:
+                        start_event = starts.get(run["operation_run_id"], {})
+                        durations.append({"item_id": item["item_id"], "operation_run_id": run["operation_run_id"],
+                                          "station_id": run["station_id"], "operator_alias": run["operator_alias"],
+                                          "shift_id": start_event.get("shift_id"), "active_seconds": run["active_seconds"],
+                                          "elapsed_seconds": run["elapsed_seconds"]})
             return {"checked_items": len(checked), "items_without_usable_inspection": len(unable - checked),
                     "items_with_confirmed_defect": len({c["item_id"] for c in confirmed}),
                     "confirmed_defect_cases": len(confirmed), "confirmed_incoming_cases": incoming,
@@ -826,6 +915,14 @@ class EventStore:
                     "pending_cases": sum(c["status"] == "awaiting_review" for c in self.cases()),
                     "completed_operation_runs": sum(run["active_seconds"] is not None for run in runs),
                     "rework_runs": sum(bool(run["previous_run_id"]) for run in runs),
+                    "confirmed_defects_by_type": counts(c["defect_type"] for c in confirmed),
+                    "confirmed_defects_by_line": counts(evidence(c).get("line_id") for c in confirmed),
+                    "confirmed_defects_by_station": counts(evidence(c).get("station_id") for c in confirmed),
+                    "confirmed_cases_by_cause": counts(c["cause_status"] for c in confirmed),
+                    "operation_durations": durations,
+                    "confirmed_errors_by_comparable_work": counts(c["decisions"][-1]["comparable_work_key"]
+                                                           for c in confirmed if c["decisions"][-1]["error_confirmed"]),
+                    "confirmed_errors_note": "Учитываются только ошибки, явно подтверждённые контролёром; автоматика не устанавливает вину.",
                     "rule_version": 1}
 
     def outbox(self) -> list[dict[str, Any]]:
@@ -866,7 +963,8 @@ class EventStore:
                 raise ValueError("audit head mismatch")
             return {"checked_events": len(rows), "valid": True,
                     "event_digests_verified": True, "hash_chain_verified": True,
-                    "anchor_verified": True}
+                    "anchor_verified": True, "decisions_and_outbox_verified": True,
+                    "critical_scope": "current decisions and outbox rows; legacy rows were baselined at migration"}
 
     def close(self) -> None:
         self.db.close()

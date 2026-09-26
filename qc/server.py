@@ -179,7 +179,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 result = self.server.store.decide(
                     case_id, body.get("action", ""), body.get("actor", ""),
                     body.get("reason", ""), body.get("expected_version"),
-                    body.get("idempotency_key", ""),
+                    body.get("idempotency_key", ""), body.get("cause_status", "unknown"),
+                    body.get("comparable_work_key"), body.get("error_confirmed", False),
                 )
                 self._respond(HTTPStatus.CREATED, result)
                 return

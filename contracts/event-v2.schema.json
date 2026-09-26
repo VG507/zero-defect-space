@@ -61,6 +61,14 @@
     "operator_alias": {
       "type": "string"
     },
+    "line_id": {
+      "type": "string",
+      "description": "Optional production line identifier for analytics"
+    },
+    "shift_id": {
+      "type": "string",
+      "description": "Optional source-supplied shift identifier; never inferred from clock time"
+    },
     "source_firmware_version": {
       "type": "string",
       "description": "Added in V2: sensor/station firmware version"

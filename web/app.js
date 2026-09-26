@@ -279,6 +279,21 @@ async function refresh() {
     $("confirmed").textContent = metrics.items_with_confirmed_defect;
     $("pending").textContent = metrics.pending_cases;
     $("unknown").textContent = metrics.items_without_usable_inspection;
+    const analytics = $("analytics"); analytics.replaceChildren();
+    for (const [label, values] of [
+      ["Типы дефектов", metrics.confirmed_defects_by_type],
+      ["Линии", metrics.confirmed_defects_by_line],
+      ["Посты", metrics.confirmed_defects_by_station],
+      ["Установленная/неизвестная причина", metrics.confirmed_cases_by_cause],
+      ["Подтверждённые ошибки по сопоставимым работам", metrics.confirmed_errors_by_comparable_work]
+    ]) {
+      const entries = Object.entries(values || {});
+      analytics.append(element("p", "analytics-row", `${label}: ${entries.length ? entries.map(([name, count]) => `${name} — ${count}`).join("; ") : "нет подтверждённых данных"}`));
+    }
+    const durations = metrics.operation_durations || [];
+    analytics.append(element("p", "analytics-row", `Завершённые операции: ${durations.length}; активное время по изделию, посту, оператору и смене:`));
+    for (const run of durations) analytics.append(element("p", "analytics-row", `${run.item_id} / ${run.station_id || "пост не указан"} / ${run.operator_alias || "оператор не указан"} / ${run.shift_id || "смена не указана"}: ${run.active_seconds} с`));
+    analytics.append(element("small", "", "Причина и ошибка оператора учитываются только после явного решения контролёра. Отсутствующая смена не выводится из времени автоматически."));
     state.items = items; renderItems(items);
     renderLine(line);
     const exchange = $("outbox"); exchange.replaceChildren();
@@ -318,18 +333,19 @@ $("demo-actions").addEventListener("click", event => {
 $("print-report").addEventListener("click", () => window.print());
 $("verify-integrity").addEventListener("click", async () => {
   const panel = $("integrity-result");
-  panel.replaceChildren(element("p", "", "Проверяем исходные события и аудиторский якорь…"));
+  panel.replaceChildren(element("p", "", "Проверяем события, решения, доставки и аудиторский якорь…"));
   try {
     const result = await api("/api/integrity");
-    if (!result.valid || !result.event_digests_verified || !result.hash_chain_verified || !result.anchor_verified)
+    if (!result.valid || !result.event_digests_verified || !result.hash_chain_verified || !result.anchor_verified || !result.decisions_and_outbox_verified)
       throw new Error("Не все этапы проверки подтверждены сервером.");
     panel.replaceChildren(element("strong", "integrity-count", `Проверено исходных событий: ${result.checked_events}`));
     for (const label of ["Содержимое каждого события сверено с контрольным хэшем",
                          "Связность хэш-цепочки подтверждена",
-                         "Вершина цепочки сверена с локальным HMAC-якорем"]) {
+                         "Вершина цепочки сверена с локальным HMAC-якорем",
+                         "Решения контролёра и состояние доставки сверены с HMAC-якорем"]) {
       panel.append(element("p", "integrity-step", `✓ ${label}`));
     }
-    panel.append(element("small", "integrity-scope", "Решения контролёра и ACK не входят в эту проверку исходных событий. Якорь хранится на том же хосте; это не внешний доверенный аудит."));
+    panel.append(element("small", "integrity-scope", "Решения и ACK не входят в хэш-цепочку событий, но сверяются с локальным якорем. Старые записи зафиксированы при миграции без доказательства их прежней целостности. Это не внешний доверенный аудит."));
   } catch (error) {
     panel.replaceChildren(element("strong", "integrity-failed", "Целостность не подтверждена"),
                           element("p", "", error.message));

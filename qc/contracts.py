@@ -63,6 +63,8 @@ class IngestionEventV2(TypedDict, total=False):
     occurred_at: Required[str]
     station_id: NotRequired[str]
     operator_alias: NotRequired[str]
+    line_id: NotRequired[str]
+    shift_id: NotRequired[str]
     source_firmware_version: NotRequired[str]
     device_telemetry: NotRequired[dict[str, Any]]
     payload: Required[dict[str, Any]]

@@ -159,3 +159,10 @@ components:
           type: integer
         idempotency_key:
           type: string
+        cause_status:
+          type: string
+          enum: [unknown, incoming, equipment, operator, process, other]
+        comparable_work_key:
+          type: string
+        error_confirmed:
+          type: boolean

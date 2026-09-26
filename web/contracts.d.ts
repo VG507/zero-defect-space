@@ -42,6 +42,8 @@ export interface IngestionEventV2 {
   occurred_at: string;
   station_id?: string;
   operator_alias?: string;
+  line_id?: string;
+  shift_id?: string;
   source_firmware_version?: string;
   device_telemetry?: Record<string, unknown>;
   payload: Record<string, unknown>;
