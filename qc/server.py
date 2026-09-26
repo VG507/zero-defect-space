@@ -79,7 +79,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return False
         return True
 
-    def _body(self) -> dict:
+    def _json_body(self) -> object:
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError as exc:
@@ -87,6 +87,10 @@ class AppHandler(BaseHTTPRequestHandler):
         if length <= 0 or length > 1024 * 1024:
             raise ValueError("JSON body size must be 1..1048576 bytes")
         value = json.loads(self.rfile.read(length))
+        return value
+
+    def _body(self) -> dict:
+        value = self._json_body()
         if not isinstance(value, dict):
             raise ValueError("JSON body must be object")
         return value
@@ -152,6 +156,14 @@ class AppHandler(BaseHTTPRequestHandler):
                     return
                 result = self.server.store.ingest(self._body())
                 self._respond(HTTPStatus.CONFLICT if result["state"] == "conflict" else HTTPStatus.ACCEPTED, result)
+                return
+            if path == "/api/events/batch":
+                if not self._authorized("source", "admin"):
+                    return
+                events = self._json_body()
+                if not isinstance(events, list) or not 1 <= len(events) <= 100:
+                    raise ValueError("batch must contain 1..100 events")
+                self._respond(HTTPStatus.ACCEPTED, {"results": self.server.store.ingest_many(events)})
                 return
             if path == "/api/checkpoints/scan":
                 if not self._authorized("admin"):

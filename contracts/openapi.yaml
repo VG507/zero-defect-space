@@ -66,6 +66,47 @@ paths:
                     type: string
         '409':
           description: Conflict (same source_id/event_id with different payload)
+  /api/events/batch:
+    post:
+      summary: Atomically ingest 1 to 100 events with at most one audit-anchor update
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              minItems: 1
+              maxItems: 100
+              items:
+                oneOf:
+                  - $ref: '#/components/schemas/IngestionEventV1'
+                  - $ref: '#/components/schemas/IngestionEventV2'
+      responses:
+        '202':
+          description: Committed batch with ordered per-event results
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      required: [ingestion_id, state]
+                      properties:
+                        ingestion_id:
+                          type: string
+                        state:
+                          type: string
+                          enum: [applied, duplicate, quarantined, conflict]
+                        reason:
+                          type: [string, 'null']
+        '400':
+          description: Invalid batch envelope or event identity; no events committed
   /api/cases/{case_id}/decisions:
     post:
       summary: Record controller decision

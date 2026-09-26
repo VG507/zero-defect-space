@@ -69,6 +69,23 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(len(self.request("/api/outbox", "view")[1]), 1)
         self.assertTrue(self.request("/api/integrity", "admin")[1]["valid"])
 
+    def test_batch_event_flow_and_atomic_rejection(self):
+        first = {"schema_version": 1, "source_id": "source-a", "event_id": "batch-a",
+                 "item_id": "ITEM-A", "event_type": "ItemReceived",
+                 "occurred_at": "2026-09-25T10:00:00+03:00", "payload": {}}
+        second = {**first, "event_id": "batch-b"}
+        self.assertEqual(self.request("/api/events/batch", "view", [first])[0], 403)
+        self.assertEqual(self.request("/api/events/batch", "source", [])[0], 400)
+        self.assertEqual(self.request("/api/events/batch", "source", [first] * 101)[0], 400)
+        status, body = self.request("/api/events/batch", "source", [first, second])
+        self.assertEqual(status, 202)
+        self.assertEqual([item["state"] for item in body["results"]], ["applied", "applied"])
+        self.assertEqual(self.request("/api/integrity", "admin")[1]["checked_events"], 2)
+        rejected = {**first, "event_id": "batch-c"}
+        status, _ = self.request("/api/events/batch", "source", [rejected, {**second, "source_id": ""}])
+        self.assertEqual(status, 400)
+        self.assertEqual(self.request("/api/integrity", "admin")[1]["checked_events"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

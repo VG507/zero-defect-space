@@ -8,6 +8,7 @@ Proves:
 from __future__ import annotations
 
 import base64
+import json
 import os
 import sqlite3
 import subprocess
@@ -93,6 +94,83 @@ class WorkerCrashRecoveryTests(unittest.TestCase):
             self.assertIsNone(reopened.db.execute("SELECT * FROM cases WHERE case_id='partial'").fetchone())
             self.assertEqual(reopened.verify_integrity()["checked_events"], 1)
             self.assertEqual(reopened.ingest(event)["state"], "duplicate")
+        finally:
+            reopened.close()
+
+    def test_batch_process_kill_before_and_after_commit(self):
+        events = [{"schema_version": 1, "source_id": "crash-batch", "event_id": f"e-{index}",
+                   "item_id": "ITEM-BATCH", "event_type": "ItemReceived",
+                   "occurred_at": "2026-09-25T10:00:00+03:00", "payload": {"index": index}}
+                  for index in range(3)]
+        worker_code = (
+            "import json,sys,time\n"
+            "from qc.core import EventStore\n"
+            "s=EventStore(sys.argv[1],sys.argv[2])\n"
+            "events=json.loads(sys.argv[4])\n"
+            "if sys.argv[3]=='before':\n"
+            "    with s.transaction():\n"
+            "        s.ingest_many(events)\n"
+            "        print('READY',flush=True)\n"
+            "        time.sleep(60)\n"
+            "else:\n"
+            "    s.ingest_many(events)\n"
+            "    print('READY',flush=True)\n"
+            "    time.sleep(60)\n"
+        )
+        for mode, expected in (("before", 0), ("after", 3)):
+            with self.subTest(mode=mode):
+                path = os.path.join(self.temp.name, f"batch-{mode}.db")
+                proc = subprocess.Popen([sys.executable, "-c", worker_code, path, self.key_b64,
+                                         mode, json.dumps(events)], stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, text=True)
+                try:
+                    ready = proc.stdout.readline().strip()
+                    self.assertEqual(ready, "READY", proc.stderr.read() if not ready else "")
+                finally:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                    proc.stdout.close()
+                    proc.stderr.close()
+                reopened = EventStore(path, self.key_b64)
+                try:
+                    self.assertEqual(reopened.verify_integrity()["checked_events"], expected)
+                    count = reopened.db.execute("SELECT COUNT(*) FROM raw_events").fetchone()[0]
+                    self.assertEqual(count, expected)
+                    if expected:
+                        self.assertEqual([item["state"] for item in reopened.ingest_many(events)],
+                                         ["duplicate"] * 3)
+                finally:
+                    reopened.close()
+
+    def test_kill_after_database_commit_before_anchor_update_fails_closed(self):
+        path = os.path.join(self.temp.name, "anchor-gap.db")
+        worker_code = (
+            "import sys,time\n"
+            "from qc.core import EventStore\n"
+            "s=EventStore(sys.argv[1],sys.argv[2])\n"
+            "def interrupted_anchor():\n"
+            "    print('READY',flush=True)\n"
+            "    time.sleep(60)\n"
+            "s._write_anchor=interrupted_anchor\n"
+            "s.ingest_many([{'schema_version':1,'source_id':'s','event_id':'e',"
+            "'item_id':'I','event_type':'ItemReceived',"
+            "'occurred_at':'2026-09-25T10:00:00+03:00','payload':{}}])\n"
+        )
+        proc = subprocess.Popen([sys.executable, "-c", worker_code, path, self.key_b64],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            ready = proc.stdout.readline().strip()
+            self.assertEqual(ready, "READY", proc.stderr.read() if not ready else "")
+        finally:
+            proc.kill()
+            proc.wait(timeout=5)
+            proc.stdout.close()
+            proc.stderr.close()
+        reopened = EventStore(path, self.key_b64)
+        try:
+            with self.assertRaisesRegex(ValueError, "audit anchor mismatch"):
+                reopened.verify_integrity()
+            self.assertEqual(reopened.db.execute("SELECT COUNT(*) FROM raw_events").fetchone()[0], 1)
         finally:
             reopened.close()
 

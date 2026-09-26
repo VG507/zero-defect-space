@@ -9,6 +9,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -110,17 +111,37 @@ def project_runs(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(runs.values(), key=lambda item: (item["start"] or "", item["operation_run_id"]))
 
 
+class _ProfiledConnection(sqlite3.Connection):
+    timings: dict[str, list[float]]
+    profile_phase: str | None
+
+    def execute(self, sql: str, parameters=(), /):
+        started = time.perf_counter()
+        try:
+            return super().execute(sql, parameters)
+        finally:
+            if self.profile_phase not in {"anchor_verify", "anchor_write"}:
+                self.timings.setdefault("sqlite", []).append((time.perf_counter() - started) * 1000)
+
+
 class EventStore:
-    def __init__(self, db_path: str | Path, key_b64: str | KeyRing):
+    def __init__(self, db_path: str | Path, key_b64: str | KeyRing,
+                 timings: dict[str, list[float]] | None = None):
         if isinstance(key_b64, KeyRing):
             self.key_ring = key_b64
         else:
             self.key_ring = KeyRing.from_single_key(key_b64)
         self.cipher = self.key_ring.get_cipher(self.key_ring.primary_key_id)
+        self.timings = timings
         self.anchor_path = None if str(db_path) == ":memory:" else Path(str(db_path) + ".audit-anchor")
-        self.db = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
+        self.db = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None,
+                                  factory=_ProfiledConnection if timings is not None else sqlite3.Connection)
+        if timings is not None:
+            self.db.timings = timings
+            self.db.profile_phase = None
         self.db.row_factory = sqlite3.Row
         self.lock = threading.RLock()
+        self._transaction_depth = 0
         old_table = self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='raw_events'").fetchone()
         if old_table and self.anchor_path is not None and not self.anchor_path.exists():
             if self.db.execute("SELECT COUNT(*) FROM raw_events").fetchone()[0]:
@@ -254,12 +275,43 @@ class EventStore:
         os.replace(temporary, self.anchor_path)
 
     @contextmanager
+    def _profile(self, phase: str):
+        if self.timings is None:
+            yield
+            return
+        previous = self.db.profile_phase
+        self.db.profile_phase = phase
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.timings.setdefault(phase, []).append((time.perf_counter() - started) * 1000)
+            self.db.profile_phase = previous
+
+    @contextmanager
     def transaction(self):
         with self.lock:
+            if self._transaction_depth:
+                savepoint = f"qc_nested_{self._transaction_depth}"
+                self.db.execute(f"SAVEPOINT {savepoint}")
+                self._transaction_depth += 1
+                try:
+                    yield
+                except BaseException:
+                    self.db.execute(f"ROLLBACK TO {savepoint}")
+                    self.db.execute(f"RELEASE {savepoint}")
+                    raise
+                else:
+                    self.db.execute(f"RELEASE {savepoint}")
+                finally:
+                    self._transaction_depth -= 1
+                return
             self.db.execute("BEGIN IMMEDIATE")
+            self._transaction_depth = 1
             try:
-                self._check_anchor()
-                before = self._anchor_state()
+                with self._profile("anchor_verify"):
+                    self._check_anchor()
+                    before = self._anchor_state()
                 yield
             except BaseException:
                 self.db.execute("ROLLBACK")
@@ -267,7 +319,10 @@ class EventStore:
             else:
                 self.db.execute("COMMIT")
                 if self._anchor_state() != before:
-                    self._write_anchor()
+                    with self._profile("anchor_write"):
+                        self._write_anchor()
+            finally:
+                self._transaction_depth = 0
 
     def _decode(self, row: sqlite3.Row) -> dict[str, Any]:
         aad = canonical({"source_id": row["source_id"], "event_id": row["event_id"]})
@@ -391,7 +446,8 @@ class EventStore:
                 return {"ingestion_id": old["ingestion_id"], "state": "duplicate"}
             ingestion_id = str(uuid.uuid4())
             aad = canonical({"source_id": event["source_id"], "event_id": event["event_id"]})
-            envelope = self.key_ring.encrypt_envelope(raw, aad, profile_id=profile_id)
+            with self._profile("crypto"):
+                envelope = self.key_ring.encrypt_envelope(raw, aad, profile_id=profile_id)
             nonce = envelope["nonce"]
             ciphertext = envelope["ciphertext"]
             key_id = envelope["key_id"]
@@ -447,6 +503,15 @@ class EventStore:
                     (event["item_id"], occurred_at),
                 )
             return {"ingestion_id": ingestion_id, "state": state, "reason": reason}
+
+    def ingest_many(self, events: list[dict[str, Any]], profile_id: str | None = None) -> list[dict[str, Any]]:
+        """Commit a batch atomically; verify once and advance the anchor at most once."""
+        if not isinstance(events, list):
+            raise ValueError("events must be a list")
+        if not events:
+            return []
+        with self.transaction():
+            return [self.ingest(event, profile_id=profile_id) for event in events]
 
     def history(self, item_id: str) -> dict[str, Any]:
         with self.lock:
