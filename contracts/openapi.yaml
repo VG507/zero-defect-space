@@ -1,0 +1,150 @@
+openapi: 3.1.0
+info:
+  title: Zero Defect Space API
+  description: Contract specification for quality-control events and controller decisions
+  version: 1.0.0
+paths:
+  /health:
+    get:
+      summary: Healthcheck
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /api/me:
+    get:
+      summary: Get role of current token
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Authenticated user role
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [role]
+                properties:
+                  role:
+                    type: string
+                    enum: [viewer, controller, admin, source]
+  /api/events:
+    post:
+      summary: Ingest a raw quality control event
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestionEventV1'
+      responses:
+        '202':
+          description: Accepted or duplicate event
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ingestion_id, state]
+                properties:
+                  ingestion_id:
+                    type: string
+                  state:
+                    type: string
+                    enum: [applied, duplicate, quarantined, conflict]
+                  reason:
+                    type: string
+        '409':
+          description: Conflict (same source_id/event_id with different payload)
+  /api/cases/{case_id}/decisions:
+    post:
+      summary: Record controller decision
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: case_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllerDecisionRequest'
+      responses:
+        '201':
+          description: Decision created
+        '409':
+          description: Stale version or conflict
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    IngestionEventV1:
+      type: object
+      required:
+        - schema_version
+        - source_id
+        - event_id
+        - item_id
+        - event_type
+        - occurred_at
+        - payload
+      properties:
+        schema_version:
+          type: integer
+          example: 1
+        source_id:
+          type: string
+          example: demo-camera
+        event_id:
+          type: string
+          example: cam-101
+        item_id:
+          type: string
+          example: I-003
+        event_type:
+          type: string
+          example: InspectionReported
+        occurred_at:
+          type: string
+          format: date-time
+          example: "2026-09-25T10:11:00+03:00"
+        station_id:
+          type: string
+        operator_alias:
+          type: string
+        payload:
+          type: object
+    ControllerDecisionRequest:
+      type: object
+      required:
+        - action
+        - actor
+        - reason
+        - expected_version
+        - idempotency_key
+      properties:
+        action:
+          type: string
+          enum: [confirmed, rejected, needs_more_inspection]
+        actor:
+          type: string
+        reason:
+          type: string
+        expected_version:
+          type: integer
+        idempotency_key:
+          type: string

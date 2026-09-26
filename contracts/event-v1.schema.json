@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zero-defect.space/schemas/event-v1.json",
+  "title": "IngestionEventV1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "source_id",
+    "event_id",
+    "item_id",
+    "event_type",
+    "occurred_at",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Event schema version, strictly 1 for V1"
+    },
+    "source_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique identifier of reporting source/sensor"
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique identifier of the event from the source"
+    },
+    "item_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifier of the item under inspection/operation"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "WorkOrderReceived",
+        "ItemReceived",
+        "IncomingInspectionCompleted",
+        "OperationStarted",
+        "OperationPaused",
+        "OperationResumed",
+        "OperationFinished",
+        "ReworkStarted",
+        "InspectionReported",
+        "OperatorActionObserved",
+        "MachineStateChanged",
+        "MachineWarning",
+        "MachineStopped",
+        "AssemblyImported"
+      ]
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp with explicit timezone"
+    },
+    "station_id": {
+      "type": "string",
+      "description": "Optional identifier of the station"
+    },
+    "operator_alias": {
+      "type": "string",
+      "description": "Optional operator alias"
+    },
+    "payload": {
+      "type": "object",
+      "description": "Event-specific payload"
+    }
+  },
+  "additionalProperties": false
+}

@@ -16,6 +16,8 @@ from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from qc.crypto import DEFAULT_PROFILE, HYBRID_PQ_PROFILE, KeyRing
+
 
 EVENT_TYPES = {
     "WorkOrderReceived", "ItemReceived", "IncomingInspectionCompleted",
@@ -108,11 +110,12 @@ def project_runs(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 class EventStore:
-    def __init__(self, db_path: str | Path, key_b64: str):
-        key = base64.b64decode(key_b64, validate=True)
-        if len(key) != 32:
-            raise ValueError("encryption key must be 32 bytes, base64 encoded")
-        self.cipher = AESGCM(key)
+    def __init__(self, db_path: str | Path, key_b64: str | KeyRing):
+        if isinstance(key_b64, KeyRing):
+            self.key_ring = key_b64
+        else:
+            self.key_ring = KeyRing.from_single_key(key_b64)
+        self.cipher = self.key_ring.get_cipher(self.key_ring.primary_key_id)
         self.db = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
         self.lock = threading.RLock()
@@ -133,6 +136,8 @@ class EventStore:
                 digest TEXT NOT NULL,
                 nonce BLOB NOT NULL,
                 ciphertext BLOB NOT NULL,
+                key_id TEXT NOT NULL DEFAULT 'k1',
+                crypto_profile_id TEXT NOT NULL DEFAULT 'AES-256-GCM-v1',
                 UNIQUE(source_id, event_id)
             );
             CREATE INDEX IF NOT EXISTS idx_raw_item ON raw_events(item_id, occurred_at);
@@ -206,14 +211,17 @@ class EventStore:
 
     def _decode(self, row: sqlite3.Row) -> dict[str, Any]:
         aad = canonical({"source_id": row["source_id"], "event_id": row["event_id"]})
-        raw = self.cipher.decrypt(row["nonce"], row["ciphertext"], aad)
+        key_id = row["key_id"] if "key_id" in row.keys() else "k1"
+        profile_id = row["crypto_profile_id"] if "crypto_profile_id" in row.keys() else DEFAULT_PROFILE
+        raw = self.key_ring.decrypt_envelope(key_id, profile_id, row["nonce"], row["ciphertext"], aad)
         if hashlib.sha256(raw).hexdigest() != row["digest"]:
             raise ValueError(f"integrity failure for {row['ingestion_id']}")
         return json.loads(raw)
 
     @staticmethod
     def _validate(event: dict[str, Any]) -> None:
-        if type(event.get("schema_version")) is not int or event["schema_version"] != 1:
+        version = event.get("schema_version")
+        if type(version) is not int or version not in (1, 2):
             raise ValueError("unsupported schema_version")
         kind = event.get("event_type")
         if not isinstance(kind, str) or kind not in EVENT_TYPES:
@@ -275,7 +283,7 @@ class EventStore:
                 if "area" in defect and not isinstance(defect["area"], str):
                     raise ValueError("defect area must be string")
 
-    def ingest(self, event: dict[str, Any]) -> dict[str, Any]:
+    def ingest(self, event: dict[str, Any], profile_id: str | None = None) -> dict[str, Any]:
         if not isinstance(event, dict):
             raise ValueError("event must be object")
         for field in ("source_id", "event_id"):
@@ -299,9 +307,12 @@ class EventStore:
                             "reason": "same source_id/event_id, different payload"}
                 return {"ingestion_id": old["ingestion_id"], "state": "duplicate"}
             ingestion_id = str(uuid.uuid4())
-            nonce = os.urandom(12)
-            ciphertext = self.cipher.encrypt(
-                nonce, raw, canonical({"source_id": event["source_id"], "event_id": event["event_id"]}))
+            aad = canonical({"source_id": event["source_id"], "event_id": event["event_id"]})
+            envelope = self.key_ring.encrypt_envelope(raw, aad, profile_id=profile_id)
+            nonce = envelope["nonce"]
+            ciphertext = envelope["ciphertext"]
+            key_id = envelope["key_id"]
+            crypto_profile_id = envelope["crypto_profile_id"]
             try:
                 self._validate(event)
                 state, reason = "applied", None
@@ -309,11 +320,11 @@ class EventStore:
             except ValueError as exc:
                 state, reason, occurred_at = "quarantined", str(exc), None
             self.db.execute(
-                "INSERT INTO raw_events VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO raw_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ingestion_id, event["source_id"], event["event_id"],
                  event.get("item_id") if isinstance(event.get("item_id"), str) else None,
                  event.get("event_type") if isinstance(event.get("event_type"), str) else None,
-                 occurred_at, utc_now(), digest, nonce, ciphertext),
+                 occurred_at, utc_now(), digest, nonce, ciphertext, key_id, crypto_profile_id),
             )
             self.db.execute(
                 "INSERT INTO processing_events(ingestion_id,state,reason,at) VALUES (?,?,?,?)",

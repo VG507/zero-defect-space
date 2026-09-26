@@ -5,3 +5,4 @@ __pycache__/
 *.db-wal
 dashboard-smoke.png
 .venv/
+.agents/

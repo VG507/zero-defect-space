@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zero-defect.space/schemas/event-v2.json",
+  "title": "IngestionEventV2",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "source_id",
+    "event_id",
+    "item_id",
+    "event_type",
+    "occurred_at",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 2,
+      "description": "Event schema version, strictly 2 for V2"
+    },
+    "source_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "item_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "WorkOrderReceived",
+        "ItemReceived",
+        "IncomingInspectionCompleted",
+        "OperationStarted",
+        "OperationPaused",
+        "OperationResumed",
+        "OperationFinished",
+        "ReworkStarted",
+        "InspectionReported",
+        "OperatorActionObserved",
+        "MachineStateChanged",
+        "MachineWarning",
+        "MachineStopped",
+        "AssemblyImported"
+      ]
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "station_id": {
+      "type": "string"
+    },
+    "operator_alias": {
+      "type": "string"
+    },
+    "source_firmware_version": {
+      "type": "string",
+      "description": "Added in V2: sensor/station firmware version"
+    },
+    "device_telemetry": {
+      "type": "object",
+      "description": "Added in V2: optional device hardware status metrics"
+    },
+    "payload": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}
