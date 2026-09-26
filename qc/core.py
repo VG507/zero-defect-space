@@ -797,7 +797,9 @@ class EventStore:
                     expected_prev = actual_hash
             if expected_prev != self._anchor_state()["head"]:
                 raise ValueError("audit head mismatch")
-            return {"checked_events": len(rows), "valid": True, "hash_chain_verified": True}
+            return {"checked_events": len(rows), "valid": True,
+                    "event_digests_verified": True, "hash_chain_verified": True,
+                    "anchor_verified": True}
 
     def close(self) -> None:
         self.db.close()

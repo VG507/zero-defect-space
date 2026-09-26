@@ -18,7 +18,7 @@
       <div><p class="kicker">ПРОИЗВОДСТВЕННЫЙ КОНТУР / MVP</p><h1 id="page-title">История изделия.<br>Основания для решения.</h1><p>Сигнал камеры не равен подтверждённому браку. Откройте изделие, проверьте события и зафиксируйте решение контролёра.</p></div>
       <form id="access-form" class="access-panel">
         <label for="token">Токен роли</label>
-        <input id="token" type="password" autocomplete="off" placeholder="Введите viewer или controller token" required>
+        <input id="token" type="password" autocomplete="off" placeholder="Введите viewer, controller или admin token" required>
         <button type="submit">Открыть данные</button>
         <small>Токен хранится только в памяти этой вкладки. Локальная демонстрация; не используйте реальные производственные данные.</small>
       </form>
@@ -31,6 +31,8 @@
         <button type="button" data-item="I-002">Входной дефект · I-002</button>
         <button type="button" data-item="I-003">Сигнал после операции · I-003</button>
         <button type="button" data-item="I-004">Нет пригодного контроля · I-004</button>
+        <button type="button" data-item="I-005">Повторная обработка · I-005</button>
+        <button type="button" data-item="I-006">Позднее событие · I-006</button>
       </div>
       <p id="scenario-explanation" class="demo-explanation">Выберите сценарий, чтобы открыть его историю.</p>
     </section>
@@ -46,7 +48,7 @@
       <section class="pane detail-pane" aria-labelledby="detail-title"><div class="pane-heading"><div><p class="kicker">ТРАССИРОВКА</p><h2 id="detail-title">Выберите изделие</h2></div><button id="print-report" type="button" disabled>Печатный отчёт</button></div><p class="report-disclaimer">Демонстрационный отчёт прослеживаемости. Не официальный формуляр и не допуск изделия.</p><div id="detail" class="detail"><p class="empty">Хронология и решения появятся после выбора изделия.</p></div></section>
     </div>
     <section class="pane integration-pane" aria-labelledby="integration-title"><div class="pane-heading"><div><p class="kicker">ОБМЕН</p><h2 id="integration-title">Исходящие результаты</h2></div></div><div id="outbox" class="integration-content"><p class="empty">После решения контролёра здесь появится сообщение для внешней системы.</p></div></section>
-    <section class="pane system-pane" aria-labelledby="system-title"><div class="pane-heading"><div><h2 id="system-title">Что проверено в этом запуске</h2></div><button id="verify-integrity" type="button" hidden>Проверить журнал</button></div><div id="system-status" class="system-status"><p class="empty">Откройте данные, чтобы увидеть состояние контура.</p></div><p id="integrity-result" role="status" aria-live="polite"></p></section>
+    <section class="pane system-pane" aria-labelledby="system-title"><div class="pane-heading"><div><h2 id="system-title">Что проверено в этом запуске</h2></div><button id="verify-integrity" type="button" hidden>Проверить журнал</button></div><div id="system-status" class="system-status"><p class="empty">Откройте данные, чтобы увидеть состояние контура.</p></div><div id="integrity-result" class="integrity-result" role="status" aria-live="polite"></div></section>
   </main>
   <footer>Демо на синтетических событиях. Не является системой допуска деталей к производству.</footer>
 </body>

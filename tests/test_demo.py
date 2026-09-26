@@ -19,9 +19,13 @@ class DemoTests(unittest.TestCase):
             bridge = Bridge(store, f"http://127.0.0.1:{emulator.server_port}", "route-secret")
             self.assertEqual(len(bridge.pull_orders()), 4)
             seed(store)
-            self.assertEqual(len(store.items()), 4)
-            self.assertEqual(store.metrics()["checked_items"], 3)
-            self.assertEqual(store.metrics()["items_with_confirmed_defect"], 2)
+            integrity = store.verify_integrity()
+            self.assertEqual(integrity["checked_events"], 31)
+            self.assertTrue(all(integrity[name] for name in
+                                ("valid", "event_digests_verified", "hash_chain_verified", "anchor_verified")))
+            self.assertEqual(len(store.items()), 6)
+            self.assertEqual(store.metrics()["checked_items"], 5)
+            self.assertEqual(store.metrics()["items_with_confirmed_defect"], 3)
             self.assertEqual(store.metrics()["items_without_usable_inspection"], 1)
             normal = store.history("I-001")
             self.assertEqual([run["station_id"] for run in normal["operation_runs"]], ["A", "B"])
@@ -39,11 +43,24 @@ class DemoTests(unittest.TestCase):
             self.assertEqual((warning["payload"]["equipment_id"], warning["payload"]["operation_run_id"]),
                              ("W-01", "R-003-A"))
             self.assertEqual(post["cases"][0]["cause_status"], "unknown")
+            rework = store.history("I-005")
+            self.assertEqual([run["active_seconds"] for run in rework["operation_runs"]], [240, 240])
+            self.assertEqual(rework["operation_runs"][1]["previous_run_id"], "R-005-1")
+            self.assertEqual([d["action"] for d in rework["cases"][0]["decisions"]],
+                             ["confirmed", "needs_more_inspection"])
+            self.assertEqual(rework["cases"][0]["status"], "needs_more_inspection")
+            late = store.history("I-006")
+            self.assertEqual([record["event"]["event_id"] for record in late["events"]],
+                             ["I-006-1", "I-006-3", "I-006-2"])
+            self.assertEqual(late["cases"][0]["first_ingestion_id"], late["events"][2]["ingestion_id"])
+            self.assertEqual(late["cases"][0]["context"]["classification"], "incoming_signal")
+            self.assertTrue(late["cases"][0]["review_required"])
+            self.assertEqual(len(late["cases"][0]["decisions"]), 1)
             self.assertEqual(store.scan_checkpoints(), [{"item_id": "I-004", "checkpoint_id": "incoming-check", "state": "missing"}])
             self.assertEqual(store.history("I-004")["checkpoints"][0]["state"], "missing")
             self.assertEqual({row["item_id"]: row["state"] for row in store.line_overview()}["I-004"], "missing_control")
-            self.assertEqual([row["state"] for row in bridge.push_results()], ["acknowledged", "acknowledged"])
-            self.assertEqual(len(emulator.receipts), 2)
+            self.assertEqual([row["state"] for row in bridge.push_results()], ["acknowledged"] * 5)
+            self.assertEqual(len(emulator.receipts), 5)
         finally:
             emulator.shutdown()
             emulator.server_close()
@@ -54,10 +71,11 @@ class DemoTests(unittest.TestCase):
         store = EventStore(":memory:", base64.b64encode(os.urandom(32)).decode())
         try:
             seed(store)
-            self.assertEqual(store.metrics()["checked_items"], 3)
-            self.assertEqual(store.metrics()["items_with_confirmed_defect"], 2)
+            self.assertEqual(store.metrics()["checked_items"], 5)
+            self.assertEqual(store.metrics()["items_with_confirmed_defect"], 3)
             self.assertEqual(store.metrics()["items_without_usable_inspection"], 1)
-            self.assertEqual(store.metrics()["completed_operation_runs"], 3)
+            self.assertEqual(store.metrics()["completed_operation_runs"], 5)
+            self.assertEqual(store.metrics()["rework_runs"], 1)
             case = store.history("I-003")["cases"][0]
             self.assertEqual(case["context"]["classification"], "new_after_last_good_observation")
             self.assertEqual(len(case["context"]["machine_ingestion_ids"]), 1)
@@ -67,6 +85,8 @@ class DemoTests(unittest.TestCase):
             self.assertEqual(states["I-001"], "no_confirmed_nonconformance")
             self.assertEqual(states["I-002"], "confirmed_nonconformance")
             self.assertEqual(states["I-004"], "insufficient_observation")
+            self.assertEqual(states["I-005"], "review_required")
+            self.assertEqual(states["I-006"], "review_required")
         finally:
             store.close()
 

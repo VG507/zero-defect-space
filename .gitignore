@@ -6,6 +6,11 @@ __pycache__/
 *.audit-anchor
 *.audit-anchor.tmp
 demo/recordings/
+demo/
+IMPLEMENTATION_PLAN.md
+task_plan.md
+findings.md
+progress.md
 .playwright-browsers/
 dashboard-smoke.png
 .venv/

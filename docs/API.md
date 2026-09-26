@@ -17,7 +17,7 @@
 | `POST /api/cases/{case_id}/decisions` | controller/admin | Добавить решение; `expected_version` и `idempotency_key` обязательны |
 | `GET /api/metrics` | viewer/controller/admin | Основные счётчики, версия правил |
 | `GET /api/outbox` | viewer/controller/admin | Состояние исходящих результатов |
-| `GET /api/integrity` | admin | Расшифровать и проверить имеющиеся записи |
+| `GET /api/integrity` | admin | Расшифровать и проверить исходные записи, хэш-цепочку и локальный HMAC-якорь. Успешный ответ содержит `checked_events`, `valid`, `event_digests_verified`, `hash_chain_verified`, `anchor_verified`; при ошибке проверка не подтверждена. Решения и ACK этой проверкой не охвачены. |
 
 Минимальный конверт входа:
 

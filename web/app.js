@@ -8,7 +8,7 @@ async function api(path, options = {}) {
     headers: { "Authorization": `Bearer ${state.token}`, "Content-Type": "application/json", ...(options.headers || {}) }
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
   return data;
 }
 
@@ -35,7 +35,9 @@ const scenarioDescriptions = {
   "I-001": "Штатные операции и пригодный итоговый контроль. Это не автоматический допуск изделия.",
   "I-002": "Признак обнаружен на входе, до последующих операций. Денежный эффект не рассчитывался.",
   "I-003": "Предупреждение станка и действие оператора рядом по времени с признаком. Причина не установлена автоматически.",
-  "I-004": "Непригодный результат не закрывает контрольную точку и не считается подтверждением годности."
+  "I-004": "Непригодный результат не закрывает контрольную точку и не считается подтверждением годности.",
+  "I-005": "Первое решение сохранено, повторная операция связана с исходной, итоговый допуск не назначается автоматически.",
+  "I-006": "Входной факт поступил после решения. История перестроена по времени источника; решение сохранено и требуется пересмотр."
 };
 
 function renderLine(items) {
@@ -109,6 +111,79 @@ function renderCase(item) {
   return card;
 }
 
+function renderInvestigation(data) {
+  const section = element("section", "investigation");
+  section.append(element("h3", "section-label", "Материалы расследования"));
+  if (!data.cases.length) {
+    section.append(element("p", "empty", "Случаев дефекта нет. Доступна хронология контроля ниже."));
+    return section;
+  }
+  const records = new Map(data.events.map(record => [record.ingestion_id, record]));
+  for (const defectCase of data.cases) {
+    const card = element("article", "investigation-case");
+    card.append(element("strong", "", `${defectCase.defect_type} · ${defectCase.area}`));
+    const context = defectCase.context;
+    const evidence = [
+      [context.last_good_ingestion_id, "Последний пригодный контроль без признаков"],
+      [context.operation_start_ingestion_id, "Начало операции"],
+      ...context.machine_ingestion_ids.map(id => [id, "Сигнал оборудования"]),
+      ...context.operator_ingestion_ids.map(id => [id, "Действие оператора"]),
+      [context.detection_ingestion_id, "Обнаружение признака"]
+    ].filter(([id]) => records.has(id));
+    const timeline = element("ol", "investigation-timeline");
+    evidence.sort((a, b) => records.get(a[0]).event.occurred_at.localeCompare(records.get(b[0]).event.occurred_at));
+    for (const [id, label] of evidence) {
+      const record = records.get(id);
+      const entry = element("li", "");
+      entry.append(element("strong", "", label), element("span", "", `${record.event.occurred_at} · ${record.event.event_type}`));
+      const payload = record.event.payload;
+      if (payload.code || payload.equipment_id || payload.action)
+        entry.append(element("small", "", [payload.equipment_id, payload.code, payload.action].filter(Boolean).join(" · ")));
+      if (payload.evidence_image) entry.append(element("small", "", "Фото приложено к событию ниже"));
+      timeline.append(entry);
+    }
+    for (const decision of defectCase.decisions) {
+      const entry = element("li", "investigation-decision");
+      entry.append(element("strong", "", `Решение контролёра: ${labelFor(decision.action)}`),
+                   element("span", "", `${decision.at} · ${decision.actor}`));
+      timeline.append(entry);
+    }
+    card.append(timeline);
+    card.append(element("p", "investigation-caution", defectCase.review_required
+      ? "После решения поступило более раннее событие. Основания требуют пересмотра; прежнее решение сохранено."
+      : "События сопоставлены по времени. Причина дефекта и ответственность человека автоматически не установлены."));
+    section.append(card);
+  }
+  return section;
+}
+
+function renderCostComparison(itemId) {
+  if (itemId !== "I-002") return null;
+  const section = element("section", "cost-comparison");
+  section.append(element("h3", "section-label", "Цена позднего обнаружения — учебный расчёт"),
+                 element("p", "", "Сценарий: входной дефект найден до обработки. Суммы ниже — редактируемые допущения, не данные предприятия и не доказанная экономия."));
+  const inputs = [];
+  for (const [label, value] of [["Входной контроль, ₽", 2000], ["Мехобработка, ₽", 12000], ["Сборка, ₽", 8000], ["Финальный контроль, ₽", 5000]]) {
+    const field = element("label", "cost-field", label);
+    const input = element("input"); input.type = "number"; input.min = "0"; input.step = "100"; input.value = String(value);
+    field.append(input); section.append(field); inputs.push(input);
+  }
+  const result = element("div", "cost-result"); section.append(result);
+  const format = amount => new Intl.NumberFormat("ru-RU").format(amount) + " ₽";
+  const update = () => {
+    const values = inputs.map(input => Number(input.value));
+    if (inputs.some(input => input.value === "") || values.some(value => !Number.isFinite(value) || value < 0)) {
+      result.textContent = "Введите неотрицательные суммы для всех этапов."; return;
+    }
+    const early = values[0]; const late = values.reduce((sum, value) => sum + value, 0);
+    result.replaceChildren(element("p", "", `При входном выявлении: ${format(early)}`),
+                           element("p", "", `При выявлении после сборки: ${format(late)}`),
+                           element("strong", "", `Разница в этой модели: ${format(late - early)}`));
+  };
+  inputs.forEach(input => input.addEventListener("input", update)); update();
+  return section;
+}
+
 async function selectItem(itemId) {
   const selection = state.selection = (state.selection || 0) + 1;
   state.selected = itemId;
@@ -121,6 +196,9 @@ async function selectItem(itemId) {
     const data = await api(`/api/items/${encodeURIComponent(itemId)}`);
     if (selection !== state.selection) return;
     panel.replaceChildren();
+    panel.append(renderInvestigation(data));
+    const comparison = renderCostComparison(itemId);
+    if (comparison) panel.append(comparison);
     panel.append(element("h3", "section-label", "Хронология событий"));
     if (!data.events.length) panel.append(element("p", "empty", "Событий нет."));
     for (const record of data.events) {
@@ -218,10 +296,21 @@ $("demo-actions").addEventListener("click", event => {
 });
 $("print-report").addEventListener("click", () => window.print());
 $("verify-integrity").addEventListener("click", async () => {
+  const panel = $("integrity-result");
+  panel.replaceChildren(element("p", "", "Проверяем исходные события и аудиторский якорь…"));
   try {
     const result = await api("/api/integrity");
-    $("integrity-result").textContent = result.valid
-      ? `Проверено событий: ${result.checked_events}; целостность подтверждена локальной проверкой.`
-      : "Нарушена целостность журнала. Эксплуатация требует расследования.";
-  } catch (error) { $("integrity-result").textContent = `Проверка не выполнена: ${error.message}`; }
+    if (!result.valid || !result.event_digests_verified || !result.hash_chain_verified || !result.anchor_verified)
+      throw new Error("Не все этапы проверки подтверждены сервером.");
+    panel.replaceChildren(element("strong", "integrity-count", `Проверено исходных событий: ${result.checked_events}`));
+    for (const label of ["Содержимое каждого события сверено с контрольным хэшем",
+                         "Связность хэш-цепочки подтверждена",
+                         "Вершина цепочки сверена с локальным HMAC-якорем"]) {
+      panel.append(element("p", "integrity-step", `✓ ${label}`));
+    }
+    panel.append(element("small", "integrity-scope", "Решения контролёра и ACK не входят в эту проверку исходных событий. Якорь хранится на том же хосте; это не внешний доверенный аудит."));
+  } catch (error) {
+    panel.replaceChildren(element("strong", "integrity-failed", "Целостность не подтверждена"),
+                          element("p", "", error.message));
+  }
 });
